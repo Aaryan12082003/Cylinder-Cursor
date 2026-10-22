@@ -1,0 +1,19 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "types": ["node"],
+    "jsx": "react-jsx",
+    "baseUrl": ".",
+    "paths": {
+      "@shared/*": ["shared/*"],
+      "@core/*": ["core/*"]
+    }
+  },
+  "include": ["electron", "core", "shared", "tests/**/*.ts", "vitest.config.ts", "electron.vite.config.ts", "playwright.config.ts"]
+}

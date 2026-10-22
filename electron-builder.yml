@@ -1,0 +1,36 @@
+appId: com.cylinderflow.desktop
+productName: CylinderFlow
+copyright: Copyright © 2026 CylinderFlow
+directories:
+  output: release
+  buildResources: build
+files:
+  - out/**/*
+  - package.json
+asar: true
+asarUnpack:
+  - node_modules/better-sqlite3/**/*
+npmRebuild: true
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  icon: build/icon.ico
+  artifactName: CylinderFlow-Setup-${version}.${ext}
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  allowElevation: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: CylinderFlow
+  installerIcon: build/icon.ico
+  uninstallerIcon: build/icon.ico
+linux:
+  target:
+    - AppImage
+  icon: build/icon.png
+  category: Office
+  artifactName: CylinderFlow-${version}.${ext}

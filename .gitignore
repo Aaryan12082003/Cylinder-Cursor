@@ -1,0 +1,14 @@
+node_modules
+out
+dist
+release
+.data
+*.log
+.DS_Store
+playwright-report
+test-results
+coverage
+*.db
+*.db-wal
+*.db-shm
+.cursor
