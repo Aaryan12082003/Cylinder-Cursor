@@ -10,7 +10,11 @@ files:
 asar: true
 asarUnpack:
   - node_modules/better-sqlite3/**/*
-npmRebuild: true
+npmRebuild: false
+publish:
+  provider: github
+  owner: Aaryan12082003
+  repo: Cylinder-Cursor
 win:
   target:
     - target: nsis

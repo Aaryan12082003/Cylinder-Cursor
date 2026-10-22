@@ -6,13 +6,17 @@
   "author": "CylinderFlow",
   "license": "UNLICENSED",
   "private": true,
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Aaryan12082003/Cylinder-Cursor.git"
+  },
   "main": "out/main/index.js",
   "scripts": {
-    "dev": "electron-vite dev",
+    "dev": "npm run rebuild:native && electron-vite dev",
     "build": "electron-vite build",
     "preview": "electron-vite preview",
-    "dist": "npm run build && electron-builder --win --x64",
-    "dist:linux": "npm run build && electron-builder --linux AppImage",
+    "dist": "npm run rebuild:native && npm run build && electron-builder --win --x64",
+    "dist:linux": "npm run rebuild:native && npm run build && electron-builder --linux AppImage",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.node.json --noEmit",
     "test": "vitest run",
     "test:e2e": "playwright test",
@@ -42,6 +46,7 @@
     "clsx": "^2.1.1",
     "date-fns": "^4.1.0",
     "drizzle-orm": "^0.44.6",
+    "electron-updater": "^6.8.9",
     "exceljs": "^4.4.0",
     "framer-motion": "^14.5.0",
     "lucide-react": "^0.544.0",

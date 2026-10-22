@@ -134,9 +134,6 @@ export function loadDemoData(ctx: AppContext) {
 export function purgeDemoData(ctx: AppContext) {
   const run = ctx.sqlite.transaction(() => {
     ctx.sqlite.exec(`
-      DELETE FROM month_end_snapshot_items;
-      DELETE FROM month_end_snapshots;
-      DELETE FROM notifications WHERE kind = 'month-end' OR ifnull(dedupe_key, '') LIKE 'month-end:%';
       DELETE FROM customer_ledger_entries WHERE is_demo = 1 OR customer_id IN (SELECT id FROM customers WHERE is_demo = 1);
       DELETE FROM customer_balances WHERE customer_id IN (SELECT id FROM customers WHERE is_demo = 1);
       DELETE FROM customer_opening_balances WHERE is_demo = 1 OR customer_id IN (SELECT id FROM customers WHERE is_demo = 1);

@@ -1,3 +1,5 @@
+import { existsSync } from 'node:fs'
+import path from 'node:path'
 import Database from 'better-sqlite3'
 import { drizzle, type BetterSQLite3Database } from 'drizzle-orm/better-sqlite3'
 import { eq } from 'drizzle-orm'
@@ -13,6 +15,81 @@ export type AppContext = {
   db: Db
   path: string
   now: () => Date
+}
+
+const CURRENT_SCHEMA_COLUMNS: Record<string, string[]> = {
+  companies: ['id', 'name', 'updated_at'],
+  users: ['id', 'name', 'role', 'created_at'],
+  cylinder_sizes: ['id', 'code', 'name', 'capacity_litres', 'sort_order', 'is_active', 'created_at'],
+  customers: ['id', 'code', 'party_name', 'created_at', 'updated_at'],
+  inventory_balances: ['size_id', 'filled_available', 'empty_available', 'with_customer', 'damaged', 'lost', 'under_maintenance', 'updated_at'],
+  dispatches: ['id', 'number', 'dispatch_date', 'customer_id'],
+  returns: ['id', 'number', 'return_date', 'customer_id'],
+  application_settings: ['key', 'value'],
+}
+
+type DatabaseSchemaKind = 'empty' | 'current' | 'incompatible'
+
+function columnNames(sqlite: Database.Database, table: string) {
+  return new Set((sqlite.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).map((column) => column.name))
+}
+
+export function classifyDatabaseSchema(sqlite: Database.Database): DatabaseSchemaKind {
+  const tables = new Set(
+    (sqlite.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'`).all() as { name: string }[]).map(
+      (row) => row.name,
+    ),
+  )
+  if (tables.size === 0) return 'empty'
+
+  for (const [table, requiredColumns] of Object.entries(CURRENT_SCHEMA_COLUMNS)) {
+    if (!tables.has(table)) return 'incompatible'
+    const columns = columnNames(sqlite, table)
+    if (!requiredColumns.every((column) => columns.has(column))) return 'incompatible'
+  }
+
+  const integerIdTables = ['companies', 'users', 'cylinder_sizes', 'customers', 'dispatches', 'returns']
+  for (const table of integerIdTables) {
+    const columns = sqlite.prepare(`PRAGMA table_info(${table})`).all() as { name: string; type: string }[]
+    const id = columns.find((column) => column.name === 'id')
+    if (!id || id.type.toUpperCase() !== 'INTEGER') return 'incompatible'
+  }
+  return 'current'
+}
+
+function currentDatabasePath(primaryPath: string) {
+  const parsed = path.parse(primaryPath)
+  return path.join(parsed.dir, `${parsed.name}-v2${parsed.ext || '.db'}`)
+}
+
+/**
+ * Older CylinderFlow releases used an unrelated TEXT-id schema at the same
+ * user-data path. Keep that database byte-for-byte intact and use a separate,
+ * deterministic database for this schema generation.
+ */
+export function resolveCompatibleDatabasePath(primaryPath: string) {
+  if (!existsSync(primaryPath)) return primaryPath
+
+  const primary = new Database(primaryPath, { readonly: true, fileMustExist: true })
+  let primaryKind: DatabaseSchemaKind
+  try {
+    primaryKind = classifyDatabaseSchema(primary)
+  } finally {
+    primary.close()
+  }
+  if (primaryKind === 'empty' || primaryKind === 'current') return primaryPath
+
+  const fallbackPath = currentDatabasePath(primaryPath)
+  if (!existsSync(fallbackPath)) return fallbackPath
+
+  const fallback = new Database(fallbackPath, { readonly: true, fileMustExist: true })
+  try {
+    const fallbackKind = classifyDatabaseSchema(fallback)
+    if (fallbackKind === 'empty' || fallbackKind === 'current') return fallbackPath
+  } finally {
+    fallback.close()
+  }
+  throw new Error(`Neither ${path.basename(primaryPath)} nor ${path.basename(fallbackPath)} uses a supported CylinderFlow database schema.`)
 }
 
 const DEFAULT_SIZES = [
@@ -43,13 +120,14 @@ export function applyPragmas(sqlite: Database.Database) {
 }
 
 export function openDatabase(dbPath: string, options?: { now?: () => Date }): AppContext {
-  const sqlite = new Database(dbPath)
+  const compatiblePath = resolveCompatibleDatabasePath(dbPath)
+  const sqlite = new Database(compatiblePath)
   applyPragmas(sqlite)
   migrate(sqlite)
   const ctx: AppContext = {
     sqlite,
     db: drizzle(sqlite, { schema }),
-    path: dbPath,
+    path: compatiblePath,
     now: options?.now ?? (() => new Date()),
   }
   seed(ctx)
@@ -72,6 +150,12 @@ export function reconnect(ctx: AppContext) {
 }
 
 function migrate(sqlite: Database.Database) {
+  const migrationColumns = sqlite
+    .prepare(`PRAGMA table_info(schema_migrations)`)
+    .all() as { name: string }[]
+  if (migrationColumns.length > 0 && !migrationColumns.some((column) => column.name === 'name')) {
+    sqlite.exec(`ALTER TABLE schema_migrations RENAME TO schema_migrations_legacy`)
+  }
   sqlite.exec(`
     CREATE TABLE IF NOT EXISTS schema_migrations (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -81,6 +165,10 @@ function migrate(sqlite: Database.Database) {
   `)
   const existing = sqlite.prepare('SELECT name FROM schema_migrations WHERE name = ?').get('001_init')
   if (existing) return
+  if (classifyDatabaseSchema(sqlite) === 'current') {
+    sqlite.prepare('INSERT INTO schema_migrations (name, applied_at) VALUES (?, ?)').run('001_init', new Date().toISOString())
+    return
+  }
   const run = sqlite.transaction(() => {
     sqlite.exec(MIGRATION_001)
     sqlite.prepare('INSERT INTO schema_migrations (name, applied_at) VALUES (?, ?)').run('001_init', new Date().toISOString())

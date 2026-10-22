@@ -1,7 +1,9 @@
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { closeDatabase, openDatabase } from '../core/db/database'
+import Database from 'better-sqlite3'
+import { closeDatabase, openDatabase, resolveCompatibleDatabasePath } from '../core/db/database'
 import { BusinessError } from '../core/services/errors'
 import { createBackup, restoreFromFile } from '../core/services/backup'
 import { createCustomer, getCustomer, listCustomers } from '../core/services/customers'
@@ -13,6 +15,7 @@ import { reportToExcel, reportToPdf } from '../core/services/exports'
 import { runReport } from '../core/services/reports'
 import { consistencyProblems } from '../core/services/stock'
 import { globalSearch } from '../core/services/search'
+import { loadDemoData, purgeDemoData } from '../core/services/demo'
 import { tempContext } from './helpers'
 
 const open: { close: () => void }[] = []
@@ -54,6 +57,75 @@ function boot(now?: () => Date) {
 }
 
 describe('business rules', () => {
+  it('preserves an incompatible legacy database and initializes the current schema separately', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cylinderflow-legacy-'))
+    const dbPath = path.join(dir, 'cylinderflow.db')
+    const legacy = new Database(dbPath)
+    legacy.exec(`
+      CREATE TABLE schema_migrations (id TEXT PRIMARY KEY, applied_at TEXT NOT NULL);
+      CREATE TABLE cylinder_sizes (
+        id TEXT PRIMARY KEY,
+        code TEXT NOT NULL UNIQUE,
+        name TEXT NOT NULL,
+        capacity_litres REAL NOT NULL,
+        sort_order INTEGER NOT NULL,
+        low_stock_threshold INTEGER NOT NULL DEFAULT 10,
+        is_active INTEGER NOT NULL DEFAULT 1,
+        is_system INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      INSERT INTO schema_migrations (id, applied_at) VALUES ('001_init', '2026-10-22T00:00:00.000Z');
+      INSERT INTO cylinder_sizes (
+        id, code, name, capacity_litres, sort_order, low_stock_threshold, is_active, is_system, created_at, updated_at
+      ) VALUES ('legacy-3l', '3L', 'Legacy 3 Litre', 3, 1, 10, 1, 1, '2026-10-22T00:00:00.000Z', '2026-10-22T00:00:00.000Z');
+    `)
+    legacy.close()
+    const originalBytes = fs.readFileSync(dbPath)
+
+    const ctx = openDatabase(dbPath)
+    open.push({ close: () => closeDatabase(ctx) })
+    expect(ctx.path).toBe(path.join(dir, 'cylinderflow-v2.db'))
+    expect(ctx.sqlite.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'customers'").get()).toBeTruthy()
+    expect(ctx.sqlite.prepare("SELECT name FROM schema_migrations WHERE name = '001_init'").get()).toBeTruthy()
+    expect(fs.readFileSync(dbPath)).toEqual(originalBytes)
+    expect(resolveCompatibleDatabasePath(dbPath)).toBe(ctx.path)
+  })
+
+  it('loads and purges demonstration data without leaving records behind', () => {
+    const env = tempContext(() => new Date('2026-10-22T10:00:00.000Z'))
+    open.push(env)
+
+    expect(loadDemoData(env.ctx)).toEqual({ loaded: true })
+    expect((env.ctx.sqlite.prepare('SELECT COUNT(*) AS n FROM customers WHERE is_demo = 1').get() as { n: number }).n).toBeGreaterThan(0)
+    expect((env.ctx.sqlite.prepare('SELECT value FROM application_settings WHERE key = ?').get('demo_loaded') as { value: string }).value).toBe('true')
+    expect(consistencyProblems(env.ctx.db)).toEqual([])
+
+    expect(purgeDemoData(env.ctx)).toEqual({ purged: true })
+    expect((env.ctx.sqlite.prepare('SELECT COUNT(*) AS n FROM customers').get() as { n: number }).n).toBe(0)
+    expect((env.ctx.sqlite.prepare('SELECT COUNT(*) AS n FROM dispatches').get() as { n: number }).n).toBe(0)
+    expect((env.ctx.sqlite.prepare('SELECT value FROM application_settings WHERE key = ?').get('demo_loaded') as { value: string }).value).toBe('false')
+    expect(consistencyProblems(env.ctx.db)).toEqual([])
+  })
+
+  it('preserves month-end snapshots when purging demonstration data', () => {
+    const env = tempContext(() => new Date('2026-10-22T10:00:00.000Z'))
+    open.push(env)
+    env.ctx.sqlite.prepare(`INSERT INTO month_end_snapshots (period_key, period_label, as_of_date, generated_at, total_with_customers, customer_count) VALUES (?, ?, ?, ?, ?, ?)`).run(
+      '2026-09',
+      'September 2026',
+      '2026-09-30',
+      '2026-10-01T00:00:00.000Z',
+      4,
+      1,
+    )
+
+    loadDemoData(env.ctx)
+    purgeDemoData(env.ctx)
+
+    expect((env.ctx.sqlite.prepare('SELECT COUNT(*) AS n FROM month_end_snapshots').get() as { n: number }).n).toBe(1)
+  })
+
   it('keeps customer opening balances out of available stock', () => {
     const { ctx, sizes, customer } = boot()
     const size = listSizeBalances(ctx.db).find((item) => item.code === '3L')

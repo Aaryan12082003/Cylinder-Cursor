@@ -16,6 +16,18 @@ npm run dev
 
 On Windows, after `npm run dist`, install `release/CylinderFlow-Setup-1.0.0.exe`. The installer creates a desktop shortcut and a Start menu shortcut. No Node.js install is required for the end user.
 
+## Automatic updates from GitHub
+
+Installed Windows builds check the public GitHub Releases feed for `Aaryan12082003/Cylinder-Cursor` after launch and periodically while the app is open. Updates download automatically in the background. CylinderFlow asks whether to restart when an update is ready; choosing **Restart now** installs it, while **Later** installs it the next time the app starts.
+
+To publish an update:
+
+1. Change the `version` in `package.json` (for example, from `1.0.0` to `1.0.1`).
+2. Run `npm run dist` on Windows. This rebuilds the native SQLite dependency, creates the installer, and writes the update metadata (`latest.yml`).
+3. Create a GitHub Release with a matching version tag such as `v1.0.1` and upload `CylinderFlow-Setup-1.0.1.exe`, its `.blockmap`, and `latest.yml`.
+
+A normal source-code push alone does not update installed clients because there is no installer artifact for them to download. Do not publish a release with a lower or unchanged version number.
+
 ## Checks
 
 ```bash
