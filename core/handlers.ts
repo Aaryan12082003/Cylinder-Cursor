@@ -32,7 +32,7 @@ import type { Host } from './host'
 import { listAudit } from './services/audit'
 import { createBackup, integrityCheck, listBackups, restoreFromFile, setBackupDirectory } from './services/backup'
 import { consistencyProblems } from './services/stock'
-import { createCustomer, getCustomer, listCustomers, setCustomerArchived, updateCustomer } from './services/customers'
+import { createCustomer, deleteCustomer, getCustomer, listCustomers, setCustomerArchived, updateCustomer } from './services/customers'
 import { loadDemoData, purgeDemoData } from './services/demo'
 import { createDispatch, createReturn, getDispatch, getReturn, listDispatches, listReturns, reverseDispatch, reverseReturn } from './services/documents'
 import { challanToPdf, reportToExcel, reportToPdf } from './services/exports'
@@ -42,7 +42,7 @@ import { ensureMonthEnd, getMonthEnd, listMonthEnds } from './services/monthEnd'
 import { listNotifications, markAllNotificationsRead, markNotificationRead, unreadCount } from './services/notifications'
 import { REPORT_CATALOG, runReport } from './services/reports'
 import { globalSearch } from './services/search'
-import { addCylinderSize, getSettings, saveLogo, updateCompany, updateCylinderSize, updateSettings, defaultBackupDir } from './services/settings'
+import { addCylinderSize, deleteCylinderSize, getSettings, saveLogo, updateCompany, updateCylinderSize, updateSettings, defaultBackupDir } from './services/settings'
 import { getDashboard } from './services/dashboard'
 import { BusinessError } from './services/errors'
 
@@ -73,6 +73,7 @@ export function buildHandlers(ctx: AppContext, host: Host): Record<Channel, (pay
       const input = parse(archiveSchema.extend({ archived: z.boolean().optional().default(true) }), payload)
       return setCustomerArchived(ctx, input.id, input.archived)
     },
+    'customers:delete': (payload) => deleteCustomer(ctx, parse(idSchema, payload).id),
     'customers:reconcile': (payload) => reconcileCustomer(ctx, parse(reconciliationSchema, payload)),
     'dispatch:list': (payload) => listDispatches(ctx, parse(documentListSchema, payload)),
     'dispatch:get': (payload) => getDispatch(ctx, parse(idSchema, payload).id),
@@ -143,6 +144,10 @@ export function buildHandlers(ctx: AppContext, host: Host): Record<Channel, (pay
     },
     'settings:updateSize': (payload) => {
       updateCylinderSize(ctx, parse(sizeUpdateSchema, payload))
+      return getSettings(ctx)
+    },
+    'settings:deleteSize': (payload) => {
+      deleteCylinderSize(ctx, parse(idSchema, payload).id)
       return getSettings(ctx)
     },
     'search:global': (payload) => globalSearch(ctx, parse(searchSchema, payload).query),

@@ -3,7 +3,18 @@ import type { CustomerCreateInput, CustomerUpdateInput } from '@shared/schemas'
 import type { CustomerBalance, CustomerRow, Page } from '@shared/types'
 import type { AppContext, Db } from '../db/database'
 import { inTx } from '../db/database'
-import { customerBalances, customerOpeningBalances, customers, cylinderSizes } from '../db/schema'
+import {
+  customerBalances,
+  customerLedgerEntries,
+  customerOpeningBalances,
+  customers,
+  cylinderSizes,
+  dispatches,
+  inventoryMovements,
+  monthEndSnapshotItems,
+  reconciliations,
+  returns,
+} from '../db/schema'
 import { BusinessError } from './errors'
 import { clean, likePattern, nullIfEmpty } from './text'
 import {
@@ -275,6 +286,37 @@ export function setCustomerArchived(ctx: AppContext, id: number, archived: boole
     })
   })
   return getCustomer(ctx, id)
+}
+
+export function deleteCustomer(ctx: AppContext, id: number) {
+  return inTx(ctx, (db) => {
+    const current = requireCustomer(db, id)
+    const references = [
+      ['customer balances', db.select({ n: sql<number>`count(*)` }).from(customerBalances).where(eq(customerBalances.customerId, id)).get()?.n],
+      ['opening balances', db.select({ n: sql<number>`count(*)` }).from(customerOpeningBalances).where(eq(customerOpeningBalances.customerId, id)).get()?.n],
+      ['ledger entries', db.select({ n: sql<number>`count(*)` }).from(customerLedgerEntries).where(eq(customerLedgerEntries.customerId, id)).get()?.n],
+      ['dispatches', db.select({ n: sql<number>`count(*)` }).from(dispatches).where(eq(dispatches.customerId, id)).get()?.n],
+      ['returns', db.select({ n: sql<number>`count(*)` }).from(returns).where(eq(returns.customerId, id)).get()?.n],
+      ['inventory movements', db.select({ n: sql<number>`count(*)` }).from(inventoryMovements).where(eq(inventoryMovements.customerId, id)).get()?.n],
+      ['reconciliations', db.select({ n: sql<number>`count(*)` }).from(reconciliations).where(eq(reconciliations.customerId, id)).get()?.n],
+      ['month-end snapshots', db.select({ n: sql<number>`count(*)` }).from(monthEndSnapshotItems).where(eq(monthEndSnapshotItems.customerId, id)).get()?.n],
+    ] as const
+    const blocking = references.find(([, count]) => Number(count ?? 0) > 0)
+    if (blocking) {
+      throw new BusinessError(`Cannot delete ${current.partyName}. It has ${blocking[0]}; archive it instead to preserve the history.`)
+    }
+    const { createdAt } = stamp(ctx.now())
+    db.delete(customers).where(eq(customers.id, id)).run()
+    writeAudit(db, {
+      occurredAt: createdAt,
+      actor: actorName(db),
+      action: 'customer_delete',
+      entityType: 'customer',
+      entityId: String(id),
+      summary: `Customer ${current.code} ${current.partyName} deleted.`,
+    })
+    return { deleted: true }
+  })
 }
 
 export function customerOutstanding(db: Db, customerId: number, sizeId: number) {

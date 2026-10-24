@@ -122,7 +122,22 @@ function deltaSummary(row: { filledDelta: number; emptyDelta: number; withCustom
   return parts.map(([label, value]) => `${Number(value) > 0 ? '+' : ''}${value} ${label}`).join(', ') || '—'
 }
 
-function OpeningDialog({ open, onOpenChange, sizes, onSaved }: { open: boolean; onOpenChange: (open: boolean) => void; sizes: { id: number; name: string; openingLocked: boolean; filled: number; empty: number; damaged: number; maintenance: number }[]; onSaved: () => void }) {
+type OpeningSize = {
+  id: number
+  name: string
+  openingLocked: boolean
+  hasOpening: boolean
+  filled: number
+  empty: number
+  damaged: number
+  maintenance: number
+  openingFilled?: number
+  openingEmpty?: number
+  openingDamaged?: number
+  openingMaintenance?: number
+}
+
+function OpeningDialog({ open, onOpenChange, sizes, onSaved }: { open: boolean; onOpenChange: (open: boolean) => void; sizes: OpeningSize[]; onSaved: () => void }) {
   const [rows, setRows] = useState<Record<number, { filled: string; empty: string; damaged: string; maintenance: string }>>({})
   const [notes, setNotes] = useState('')
   const mutation = useMutation({
@@ -138,33 +153,44 @@ function OpeningDialog({ open, onOpenChange, sizes, onSaved }: { open: boolean; 
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent title="Opening stock" description="Enter the cylinders currently on hand. Customer opening balances are recorded on each customer.">
         <div className="space-y-4">
-          {sizes.filter((size) => !('isActive' in size) || true).map((size) => {
-            const value = rows[size.id] ?? { filled: String(size.filled || ''), empty: String(size.empty || ''), damaged: String(size.damaged || ''), maintenance: String(size.maintenance || '') }
+          {sizes.map((size) => {
+            // Opening values are kept separately from current on-hand values so an
+            // audited correction does not accidentally replace the live balance.
+            const value = rows[size.id] ?? {
+              filled: String(size.hasOpening ? size.openingFilled ?? 0 : size.filled ?? ''),
+              empty: String(size.hasOpening ? size.openingEmpty ?? 0 : size.empty ?? ''),
+              damaged: String(size.hasOpening ? size.openingDamaged ?? 0 : size.damaged ?? ''),
+              maintenance: String(size.hasOpening ? size.openingMaintenance ?? 0 : size.maintenance ?? ''),
+            }
             const set = (key: keyof typeof value, next: string) => setRows((current) => ({ ...current, [size.id]: { ...value, [key]: next } }))
             return (
               <div key={size.id} className="rounded-xl border border-border p-3">
-                <div className="mb-2 text-sm font-medium">{size.name} {size.openingLocked ? <span className="text-xs font-normal text-muted">· locked</span> : null}</div>
+                <div className="mb-2 text-sm font-medium">
+                  {size.name} {size.openingLocked ? <span className="text-xs font-normal text-muted">· audited correction</span> : null}
+                </div>
+                {size.openingLocked ? <p className="mb-2 text-xs text-muted">This opening balance is already posted. You can correct the audited opening values; later dispatches, returns, and adjustments are preserved.</p> : null}
                 <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
-                  <Field label="Filled"><Input disabled={size.openingLocked} value={value.filled} onChange={(event) => set('filled', event.target.value)} inputMode="numeric" /></Field>
-                  <Field label="Empty"><Input disabled={size.openingLocked} value={value.empty} onChange={(event) => set('empty', event.target.value)} inputMode="numeric" /></Field>
-                  <Field label="Damaged"><Input disabled={size.openingLocked} value={value.damaged} onChange={(event) => set('damaged', event.target.value)} inputMode="numeric" /></Field>
-                  <Field label="Maintenance"><Input disabled={size.openingLocked} value={value.maintenance} onChange={(event) => set('maintenance', event.target.value)} inputMode="numeric" /></Field>
+                  <Field label="Filled"><Input value={value.filled} onChange={(event) => set('filled', event.target.value)} inputMode="numeric" /></Field>
+                  <Field label="Empty"><Input value={value.empty} onChange={(event) => set('empty', event.target.value)} inputMode="numeric" /></Field>
+                  <Field label="Damaged"><Input value={value.damaged} onChange={(event) => set('damaged', event.target.value)} inputMode="numeric" /></Field>
+                  <Field label="Maintenance"><Input value={value.maintenance} onChange={(event) => set('maintenance', event.target.value)} inputMode="numeric" /></Field>
                 </div>
               </div>
             )
           })}
+          {sizes.some((size) => size.openingLocked) ? <p className="text-xs text-muted">A reason in Notes is required when correcting an audited opening balance.</p> : null}
           <Field label="Notes"><Textarea value={notes} onChange={(event) => setNotes(event.target.value)} /></Field>
           <div className="flex justify-end">
             <Button
               onClick={() => mutation.mutate({
-                rows: sizes.filter((size) => !size.openingLocked).map((size) => {
+                rows: sizes.map((size) => {
                   const value = rows[size.id]
                   return {
                     sizeId: size.id,
-                    filled: Number(value?.filled || size.filled || 0),
-                    empty: Number(value?.empty || size.empty || 0),
-                    damaged: Number(value?.damaged || size.damaged || 0),
-                    maintenance: Number(value?.maintenance || size.maintenance || 0),
+                    filled: Number(value?.filled ?? (size.hasOpening ? size.openingFilled : size.filled) ?? 0),
+                    empty: Number(value?.empty ?? (size.hasOpening ? size.openingEmpty : size.empty) ?? 0),
+                    damaged: Number(value?.damaged ?? (size.hasOpening ? size.openingDamaged : size.damaged) ?? 0),
+                    maintenance: Number(value?.maintenance ?? (size.hasOpening ? size.openingMaintenance : size.maintenance) ?? 0),
                     notes,
                   }
                 }),

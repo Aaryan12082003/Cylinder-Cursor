@@ -75,6 +75,7 @@ export function listSizeBalances(db: Db): SizeBalance[] {
     const damaged = balance?.damaged ?? 0
     const lost = balance?.lost ?? 0
     const maintenance = balance?.underMaintenance ?? 0
+    const opening = openings.find((row) => row.sizeId === size.id)
     return {
       id: size.id,
       code: size.code,
@@ -88,6 +89,10 @@ export function listSizeBalances(db: Db): SizeBalance[] {
       damaged,
       lost,
       maintenance,
+      openingFilled: opening?.filledQuantity ?? 0,
+      openingEmpty: opening?.emptyQuantity ?? 0,
+      openingDamaged: opening?.damagedQuantity ?? 0,
+      openingMaintenance: opening?.maintenanceQuantity ?? 0,
       owned: filled + empty + withCustomers + damaged + maintenance,
       available: filled + empty,
       openingLocked: Number(locks.find((row) => row.sizeId === size.id)?.n ?? 0) > 0,
@@ -112,10 +117,67 @@ export function setOpeningBalances(ctx: AppContext, input: OpeningStockInput) {
         .from(inventoryMovements)
         .where(and(eq(inventoryMovements.sizeId, row.sizeId), sql`${inventoryMovements.movementType} != 'opening_stock'`))
         .get()
-      if (Number(other?.n ?? 0) > 0) {
-        throw new BusinessError(
-          `Opening stock for ${size.name} is locked because later movements exist. Use an inventory adjustment.`,
-        )
+      const existingOpening = db.select().from(openingBalances).where(eq(openingBalances.sizeId, row.sizeId)).get()
+      const hasLaterMovements = Number(other?.n ?? 0) > 0
+      if (hasLaterMovements && !existingOpening) {
+        throw new BusinessError(`Opening stock for ${size.name} cannot be corrected because its recorded opening balance is missing.`)
+      }
+      if (hasLaterMovements && existingOpening) {
+        const correctionNotes = nullIfEmpty(row.notes, 300)
+        if (!correctionNotes) {
+          throw new BusinessError(`Enter a reason when correcting opening stock for ${size.name}.`)
+        }
+        const deltas: Deltas = {
+          filled: row.filled - existingOpening.filledQuantity,
+          empty: row.empty - existingOpening.emptyQuantity,
+          damaged: row.damaged - existingOpening.damagedQuantity,
+          maintenance: row.maintenance - existingOpening.maintenanceQuantity,
+        }
+        applyInventory(db, {
+          sizeId: row.sizeId,
+          deltas,
+          date: today,
+          movementType: 'opening_correction',
+          remarks: correctionNotes,
+          createdAt,
+        })
+        db.update(openingBalances)
+          .set({
+            filledQuantity: row.filled,
+            emptyQuantity: row.empty,
+            damagedQuantity: row.damaged,
+            maintenanceQuantity: row.maintenance,
+            notes: nullIfEmpty(row.notes, 300),
+            createdBy: actor,
+            recordedAt: createdAt,
+          })
+          .where(eq(openingBalances.sizeId, row.sizeId))
+          .run()
+        writeAudit(db, {
+          occurredAt: createdAt,
+          actor,
+          action: 'opening_correction',
+          entityType: 'cylinder_size',
+          entityId: String(row.sizeId),
+          summary: `Opening stock corrected for ${size.name}: ${row.filled} filled, ${row.empty} empty, ${row.damaged} damaged, ${row.maintenance} under maintenance.`,
+          detail: {
+            previous: {
+              filled: existingOpening.filledQuantity,
+              empty: existingOpening.emptyQuantity,
+              damaged: existingOpening.damagedQuantity,
+              maintenance: existingOpening.maintenanceQuantity,
+            },
+            next: {
+              filled: row.filled,
+              empty: row.empty,
+              damaged: row.damaged,
+              maintenance: row.maintenance,
+            },
+            deltas,
+            reason: correctionNotes,
+          },
+        })
+        continue
       }
       db.delete(inventoryMovements)
         .where(and(eq(inventoryMovements.sizeId, row.sizeId), eq(inventoryMovements.movementType, 'opening_stock')))

@@ -9,7 +9,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
-import { Badge, Button, Card, Dialog, DialogContent, EmptyState, Field, Input, Menu, MenuItem, Page, Pagination, Select, Sheet, Textarea } from '@/components/ui'
+import { Badge, Button, Card, ConfirmDialog, Dialog, DialogContent, EmptyState, Field, Input, Menu, MenuItem, Page, Pagination, Select, Sheet, Textarea } from '@/components/ui'
 import { api } from '@/lib/api'
 import { initials } from '@/lib/utils'
 
@@ -38,6 +38,7 @@ export function CustomersPage() {
   const [page, setPage] = useState(1)
   const [editing, setEditing] = useState<CustomerRow | null>(null)
   const [creating, setCreating] = useState(false)
+  const [deleteTarget, setDeleteTarget] = useState<CustomerRow | null>(null)
   const [openId, setOpenId] = useState<number | null>(params.get('open') ? Number(params.get('open')) : null)
   const navigate = useNavigate()
   const qc = useQueryClient()
@@ -54,6 +55,15 @@ export function CustomersPage() {
     mutationFn: ({ id, archived }: { id: number; archived: boolean }) => api.archiveCustomer(id, archived),
     onSuccess: () => {
       toast.success('Customer updated')
+      qc.invalidateQueries()
+    },
+    onError: (error: Error) => toast.error(error.message),
+  })
+  const remove = useMutation({
+    mutationFn: (id: number) => api.deleteCustomer(id),
+    onSuccess: () => {
+      toast.success('Customer deleted')
+      setDeleteTarget(null)
       qc.invalidateQueries()
     },
     onError: (error: Error) => toast.error(error.message),
@@ -91,6 +101,7 @@ export function CustomersPage() {
               <MenuItem onSelect={() => navigate(`/dispatch?customer=${row.original.id}`)}>Dispatch</MenuItem>
               <MenuItem onSelect={() => navigate(`/returns?customer=${row.original.id}`)}>Receive</MenuItem>
               <MenuItem danger={!row.original.archivedAt} onSelect={() => archive.mutate({ id: row.original.id, archived: !row.original.archivedAt })}>{row.original.archivedAt ? 'Restore' : 'Archive'}</MenuItem>
+              <MenuItem danger onSelect={() => setDeleteTarget(row.original)}>Delete permanently</MenuItem>
             </Menu>
           </div>
         ),
@@ -162,6 +173,15 @@ export function CustomersPage() {
         }}
       />
       <CustomerProfile id={openId} onClose={() => { setOpenId(null); setParams({}) }} onEdit={(row) => { setOpenId(null); setEditing(row) }} />
+      <ConfirmDialog
+        open={Boolean(deleteTarget)}
+        onOpenChange={(open) => { if (!open) setDeleteTarget(null) }}
+        title="Delete customer permanently?"
+        body={deleteTarget ? `${deleteTarget.partyName} will be permanently removed. This is only allowed when the customer has no balances, opening balances, or transaction history. Use Archive to keep historical records.` : ''}
+        confirmLabel={remove.isPending ? 'Deleting…' : 'Delete permanently'}
+        danger
+        onConfirm={() => { if (deleteTarget) remove.mutate(deleteTarget.id) }}
+      />
     </Page>
   )
 }

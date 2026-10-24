@@ -6,7 +6,7 @@ import Database from 'better-sqlite3'
 import { closeDatabase, openDatabase, resolveCompatibleDatabasePath } from '../core/db/database'
 import { BusinessError } from '../core/services/errors'
 import { createBackup, restoreFromFile } from '../core/services/backup'
-import { createCustomer, getCustomer, listCustomers } from '../core/services/customers'
+import { createCustomer, deleteCustomer, getCustomer, listCustomers } from '../core/services/customers'
 import { createDispatch, createReturn, reverseDispatch } from '../core/services/documents'
 import { adjustInventory, listSizeBalances, reconcileCustomer, setOpeningBalances } from '../core/services/inventory'
 import { ensureMonthEnd, getMonthEnd } from '../core/services/monthEnd'
@@ -16,6 +16,7 @@ import { runReport } from '../core/services/reports'
 import { consistencyProblems } from '../core/services/stock'
 import { globalSearch } from '../core/services/search'
 import { loadDemoData, purgeDemoData } from '../core/services/demo'
+import { addCylinderSize, deleteCylinderSize } from '../core/services/settings'
 import { tempContext } from './helpers'
 
 const open: { close: () => void }[] = []
@@ -90,6 +91,64 @@ describe('business rules', () => {
     expect(ctx.sqlite.prepare("SELECT name FROM schema_migrations WHERE name = '001_init'").get()).toBeTruthy()
     expect(fs.readFileSync(dbPath)).toEqual(originalBytes)
     expect(resolveCompatibleDatabasePath(dbPath)).toBe(ctx.path)
+  })
+
+  it('deletes an unused customer but preserves customers with history', () => {
+    const env = tempContext(() => new Date('2026-10-22T10:00:00.000Z'))
+    open.push(env)
+    const unused = createCustomer(env.ctx, {
+      partyName: 'Unused Customer',
+      contactPerson: '',
+      mobile: '',
+      alternateMobile: '',
+      email: '',
+      gstNumber: '',
+      billingAddress: '',
+      deliveryAddress: '',
+      city: '',
+      state: '',
+      pinCode: '',
+      status: 'active',
+      notes: '',
+      openingBalances: [],
+    })
+    expect(deleteCustomer(env.ctx, unused.id)).toEqual({ deleted: true })
+    expect(() => getCustomer(env.ctx, unused.id)).toThrow('Customer not found')
+
+    const used = createCustomer(env.ctx, {
+      partyName: 'Used Customer',
+      contactPerson: '',
+      mobile: '',
+      alternateMobile: '',
+      email: '',
+      gstNumber: '',
+      billingAddress: '',
+      deliveryAddress: '',
+      city: '',
+      state: '',
+      pinCode: '',
+      status: 'active',
+      notes: '',
+      openingBalances: [{ sizeId: env.sizes['3L'], quantity: 1 }],
+    })
+    expect(() => deleteCustomer(env.ctx, used.id)).toThrow('archive it instead')
+    expect(getCustomer(env.ctx, used.id).partyName).toBe('Used Customer')
+  })
+
+  it('deletes unused custom cylinder sizes and protects used or default sizes', () => {
+    const env = tempContext(() => new Date('2026-10-22T10:00:00.000Z'))
+    open.push(env)
+    const unused = addCylinderSize(env.ctx, { code: '47L', name: '47 Litre', capacityLitres: 47 })
+    const unrecorded = listSizeBalances(env.ctx.db).find((size) => size.id === unused.id)
+    expect(unrecorded).toMatchObject({ hasOpening: false, openingFilled: 0, openingEmpty: 0 })
+    expect(deleteCylinderSize(env.ctx, unused.id)).toEqual({ deleted: true })
+
+    const used = addCylinderSize(env.ctx, { code: '50L', name: '50 Litre', capacityLitres: 50 })
+    setOpeningBalances(env.ctx, {
+      rows: [{ sizeId: used.id, filled: 2, empty: 0, damaged: 0, maintenance: 0, notes: '' }],
+    })
+    expect(() => deleteCylinderSize(env.ctx, used.id)).toThrow('deactivate it instead')
+    expect(() => deleteCylinderSize(env.ctx, env.sizes['3L'])).toThrow('Default cylinder sizes cannot be deleted')
   })
 
   it('loads and purges demonstration data without leaving records behind', () => {
@@ -240,7 +299,7 @@ describe('business rules', () => {
     ).toThrow(/Not enough/)
   })
 
-  it('locks opening stock after later movement', () => {
+  it('corrects opening stock after later movement without rewriting history', () => {
     const { ctx, sizes, date, customer } = boot()
     createDispatch(ctx, {
       date,
@@ -251,11 +310,36 @@ describe('business rules', () => {
       remarks: '',
       lines: [{ sizeId: sizes['3L'], quantity: 1, condition: 'filled' }],
     })
+    setOpeningBalances(ctx, {
+      rows: [{ sizeId: sizes['3L'], filled: 52, empty: 5, damaged: 0, maintenance: 0, notes: 'Opening count correction' }],
+    })
+    const size = listSizeBalances(ctx.db).find((item) => item.code === '3L')
+    expect(size?.filled).toBe(51)
+    expect(size?.openingFilled).toBe(52)
+    expect(consistencyProblems(ctx.db)).toEqual([])
+    const correction = ctx.sqlite
+      .prepare("SELECT movement_type, filled_delta, remarks FROM inventory_movements WHERE movement_type = 'opening_correction'")
+      .get() as { movement_type: string; filled_delta: number; remarks: string }
+    expect(correction).toMatchObject({ movement_type: 'opening_correction', filled_delta: 2, remarks: 'Opening count correction' })
+    const audit = ctx.sqlite
+      .prepare("SELECT detail_json FROM audit_logs WHERE action = 'opening_correction' ORDER BY id DESC LIMIT 1")
+      .get() as { detail_json: string }
+    expect(JSON.parse(audit.detail_json)).toMatchObject({
+      previous: { filled: 50, empty: 5, damaged: 0, maintenance: 0 },
+      next: { filled: 52, empty: 5, damaged: 0, maintenance: 0 },
+      deltas: { filled: 2, empty: 0, damaged: 0, maintenance: 0 },
+      reason: 'Opening count correction',
+    })
     expect(() =>
       setOpeningBalances(ctx, {
-        rows: [{ sizeId: sizes['3L'], filled: 1, empty: 0, damaged: 0, maintenance: 0, notes: '' }],
+        rows: [{ sizeId: sizes['3L'], filled: 0, empty: 5, damaged: 0, maintenance: 0, notes: 'Attempt too low' }],
       }),
-    ).toThrow(/locked/)
+    ).toThrow(/Not enough filled available/)
+    expect(() =>
+      setOpeningBalances(ctx, {
+        rows: [{ sizeId: sizes['3L'], filled: 52, empty: 5, damaged: 0, maintenance: 0, notes: '' }],
+      }),
+    ).toThrow(/reason/)
   })
 
   it('posts an authorized reconciliation', () => {

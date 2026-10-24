@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
-import { Button, Card, Field, Input, Page, Select, Switch, Textarea } from '@/components/ui'
+import { Button, Card, ConfirmDialog, Field, Input, Page, Select, Switch, Textarea } from '@/components/ui'
 import { api } from '@/lib/api'
 import type { AppSettings } from '@shared/types'
 
@@ -10,6 +10,7 @@ export function SettingsPage() {
   const query = useQuery({ queryKey: ['settings'], queryFn: api.settings })
   const [draft, setDraft] = useState<AppSettings | null>(null)
   const [size, setSize] = useState({ code: '', name: '', capacityLitres: '47' })
+  const [deleteTarget, setDeleteTarget] = useState<AppSettings['sizes'][number] | null>(null)
   useEffect(() => {
     if (query.data) setDraft(query.data)
   }, [query.data])
@@ -32,6 +33,15 @@ export function SettingsPage() {
     },
     onSuccess: () => {
       toast.success('Settings saved')
+      qc.invalidateQueries()
+    },
+    onError: (error: Error) => toast.error(error.message),
+  })
+  const removeSize = useMutation({
+    mutationFn: (id: number) => api.deleteSize(id),
+    onSuccess: () => {
+      toast.success('Cylinder size deleted')
+      setDeleteTarget(null)
       qc.invalidateQueries()
     },
     onError: (error: Error) => toast.error(error.message),
@@ -89,10 +99,14 @@ export function SettingsPage() {
             {draft.sizes.map((item) => (
               <div key={item.id} className="flex items-center justify-between py-2 text-sm">
                 <span>{item.name} <span className="text-muted">{item.code}</span></span>
-                <Button size="sm" variant="ghost" onClick={() => api.updateSize({ ...item, isActive: !item.isActive }).then(() => qc.invalidateQueries()).catch((error: Error) => toast.error(error.message))}>{item.isActive ? 'Deactivate' : 'Activate'}</Button>
+                <div className="flex items-center gap-1">
+                  <Button size="sm" variant="ghost" onClick={() => api.updateSize({ ...item, isActive: !item.isActive }).then(() => qc.invalidateQueries()).catch((error: Error) => toast.error(error.message))}>{item.isActive ? 'Deactivate' : 'Activate'}</Button>
+                  {!['3L', '10L', '23L'].includes(item.code) ? <Button size="sm" variant="ghost" className="text-danger" onClick={() => setDeleteTarget(item)}>Delete</Button> : null}
+                </div>
               </div>
             ))}
           </div>
+          <p className="mt-2 text-xs text-muted">Delete is available for unused custom sizes. Default sizes stay protected; used sizes must be deactivated instead.</p>
           <div className="mt-3 grid grid-cols-3 gap-2">
             <Input placeholder="Code" value={size.code} onChange={(event) => setSize({ ...size, code: event.target.value })} />
             <Input placeholder="Name" value={size.name} onChange={(event) => setSize({ ...size, name: event.target.value })} />
@@ -111,6 +125,15 @@ export function SettingsPage() {
           <p className="text-xs text-muted">Installed {draft.installedOn ? new Date(draft.installedOn).toLocaleString() : '—'}. Records stay in the Windows application data folder and survive updates.</p>
         </Card>
       </div>
+      <ConfirmDialog
+        open={Boolean(deleteTarget)}
+        onOpenChange={(open) => { if (!open) setDeleteTarget(null) }}
+        title="Delete cylinder size permanently?"
+        body={deleteTarget ? `${deleteTarget.name} (${deleteTarget.code}) will be permanently removed. This is only allowed when it has never been used in inventory or transactions.` : ''}
+        confirmLabel={removeSize.isPending ? 'Deleting…' : 'Delete permanently'}
+        danger
+        onConfirm={() => { if (deleteTarget) removeSize.mutate(deleteTarget.id) }}
+      />
     </Page>
   )
 }

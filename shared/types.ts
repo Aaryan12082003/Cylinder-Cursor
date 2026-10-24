@@ -13,6 +13,10 @@ export type SizeBalance = {
   damaged: number
   lost: number
   maintenance: number
+  openingFilled: number
+  openingEmpty: number
+  openingDamaged: number
+  openingMaintenance: number
   owned: number
   available: number
   openingLocked: boolean
