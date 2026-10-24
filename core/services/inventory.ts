@@ -247,6 +247,12 @@ export function adjustInventory(ctx: AppContext, input: AdjustmentInput) {
     const { createdAt } = stamp(ctx.now())
     const actor = actorName(db)
     const number = nextNumber(db, 'adjustment', input.date, 'ADJ')
+    const reason = input.reason?.trim() ||
+      (input.fromState === 'external' && input.toState !== 'external'
+        ? 'Manual stock increase'
+        : input.toState === 'external' && input.fromState !== 'external'
+          ? 'Manual stock decrease'
+          : 'Manual stock adjustment')
     const deltas: Deltas = {}
     if (input.fromState !== 'external') deltas[input.fromState as StateKey] = -input.quantity
     if (input.toState !== 'external') {
@@ -259,7 +265,7 @@ export function adjustInventory(ctx: AppContext, input: AdjustmentInput) {
       date: input.date,
       movementType: 'adjustment',
       referenceNumber: number,
-      remarks: input.reason,
+      remarks: reason,
       createdAt,
     })
     db.insert(inventoryAdjustments)
@@ -270,7 +276,7 @@ export function adjustInventory(ctx: AppContext, input: AdjustmentInput) {
         fromState: input.fromState,
         toState: input.toState,
         quantity: input.quantity,
-        reason: input.reason,
+        reason,
         createdBy: actor,
         createdAt,
       })
@@ -282,7 +288,7 @@ export function adjustInventory(ctx: AppContext, input: AdjustmentInput) {
       entityType: 'inventory_adjustment',
       entityId: number,
       summary: `${number}: moved ${input.quantity} ${size.name} from ${input.fromState.replaceAll('_', ' ')} to ${input.toState.replaceAll('_', ' ')}.`,
-      detail: input,
+      detail: { ...input, reason },
     })
     assertConsistent(db)
     return { number }

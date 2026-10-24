@@ -106,7 +106,9 @@ export const adjustmentSchema = z
     fromState: z.enum(adjustmentStates),
     toState: z.enum(adjustmentStates),
     quantity: z.number().int().positive().max(1_000_000),
-    reason: z.string().trim().min(5, 'Enter a reason of at least 5 characters').max(500),
+    // A reason is optional for quick stock increases/decreases. The service
+    // records a deterministic fallback remark when it is omitted.
+    reason: optionalText(500),
   })
   .refine((value) => value.fromState !== value.toState, { message: 'Source and destination must be different' })
   .refine((value) => !(value.fromState === 'external' && value.toState === 'external'), {

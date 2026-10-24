@@ -5,7 +5,7 @@ import { useState } from 'react'
 import { toast } from 'sonner'
 import { Button, Card, Dialog, DialogContent, EmptyState, Field, Input, Page, Pagination, Select, Textarea } from '@/components/ui'
 import { api } from '@/lib/api'
-import { conditionLabel, typeLabel } from '@/lib/utils'
+import { typeLabel } from '@/lib/utils'
 import { todayIso } from '@shared/dates'
 
 export function InventoryPage() {
@@ -110,6 +110,8 @@ function Stat({ label, value }: { label: string; value: number }) {
 
 function deltaSummary(row: { filledDelta: number; emptyDelta: number; withCustomerDelta: number; damagedDelta: number; lostDelta: number; maintenanceDelta: number }) {
   const parts = [
+    ['available stock', row.filledDelta],
+    ['empty stock', row.emptyDelta],
     ['with customers', row.withCustomerDelta],
     ['damaged', row.damagedDelta],
     ['lost', row.lostDelta],
@@ -201,7 +203,7 @@ function OpeningDialog({ open, onOpenChange, sizes, onSaved }: { open: boolean; 
 }
 
 function AdjustDialog({ open, onOpenChange, sizes, onSaved }: { open: boolean; onOpenChange: (open: boolean) => void; sizes: { id: number; name: string; isActive: boolean }[]; onSaved: () => void }) {
-  const [form, setForm] = useState({ date: todayIso(), sizeId: '', fromState: 'damaged', toState: 'maintenance', quantity: '1', reason: '' })
+  const [form, setForm] = useState({ date: todayIso(), mode: 'increase' as 'increase' | 'decrease', sizeId: '', state: 'filled', quantity: '1', reason: '' })
   const mutation = useMutation({
     mutationFn: api.adjust,
     onSuccess: (result) => {
@@ -212,6 +214,7 @@ function AdjustDialog({ open, onOpenChange, sizes, onSaved }: { open: boolean; o
     onError: (error: Error) => toast.error(error.message),
   })
   const states = [
+    ['filled', 'Available stock'],
     ['damaged', 'Damaged'],
     ['lost', 'Lost'],
     ['maintenance', 'Under maintenance'],
@@ -219,33 +222,39 @@ function AdjustDialog({ open, onOpenChange, sizes, onSaved }: { open: boolean; o
   ]
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent title="Inventory adjustment" description="A reason is required. This posts an audited movement and cannot make stock negative." className="max-w-lg">
+      <DialogContent title="Increase or decrease stock" description="Choose the direction, cylinder size, condition, and quantity. Reason is optional; every change is posted to the audit history." className="max-w-lg">
         <div className="grid gap-3">
           <Field label="Date"><Input type="date" value={form.date} onChange={(event) => setForm({ ...form, date: event.target.value })} /></Field>
+          <Field label="Stock action">
+            <div className="grid grid-cols-2 gap-2">
+              <Button type="button" variant={form.mode === 'increase' ? 'primary' : 'secondary'} onClick={() => setForm({ ...form, mode: 'increase' })}>Increase stock</Button>
+              <Button type="button" variant={form.mode === 'decrease' ? 'primary' : 'secondary'} onClick={() => setForm({ ...form, mode: 'decrease' })}>Decrease stock</Button>
+            </div>
+          </Field>
           <Field label="Cylinder size">
             <Select value={form.sizeId} onChange={(event) => setForm({ ...form, sizeId: event.target.value })}>
               <option value="">Choose size</option>
               {sizes.filter((size) => size.isActive).map((size) => <option key={size.id} value={size.id}>{size.name}</option>)}
             </Select>
           </Field>
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="From">
-              <Select value={form.fromState} onChange={(event) => setForm({ ...form, fromState: event.target.value })}>
-                {states.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-              </Select>
-            </Field>
-            <Field label="To">
-              <Select value={form.toState} onChange={(event) => setForm({ ...form, toState: event.target.value })}>
-                {states.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-              </Select>
-            </Field>
-          </div>
+          <Field label="Stock condition">
+            <Select value={form.state} onChange={(event) => setForm({ ...form, state: event.target.value })}>
+              {states.filter(([value]) => value !== 'external').map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+            </Select>
+          </Field>
           <Field label="Quantity"><Input value={form.quantity} onChange={(event) => setForm({ ...form, quantity: event.target.value })} inputMode="numeric" /></Field>
-          <Field label="Reason"><Textarea value={form.reason} onChange={(event) => setForm({ ...form, reason: event.target.value })} /></Field>
+          <Field label="Reason (optional)"><Textarea value={form.reason} onChange={(event) => setForm({ ...form, reason: event.target.value })} placeholder="Optional note" /></Field>
           <div className="flex justify-end">
             <Button
               disabled={mutation.isPending}
-              onClick={() => mutation.mutate({ ...form, sizeId: Number(form.sizeId), quantity: Number(form.quantity) })}
+              onClick={() => mutation.mutate({
+                date: form.date,
+                sizeId: Number(form.sizeId),
+                fromState: form.mode === 'increase' ? 'external' : form.state,
+                toState: form.mode === 'increase' ? form.state : 'external',
+                quantity: Number(form.quantity),
+                reason: form.reason,
+              })}
             >
               Post adjustment
             </Button>
@@ -255,5 +264,3 @@ function AdjustDialog({ open, onOpenChange, sizes, onSaved }: { open: boolean; o
     </Dialog>
   )
 }
-
-void conditionLabel

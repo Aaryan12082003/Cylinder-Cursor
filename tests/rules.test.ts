@@ -302,6 +302,70 @@ describe('business rules', () => {
     ).toThrow(/Not enough/)
   })
 
+  it('supports audited stock increases and decreases from outside the books', () => {
+    const { ctx, sizes, date } = boot()
+    const before = listSizeBalances(ctx.db).find((item) => item.code === '10L')
+    expect(before?.filled).toBe(40)
+
+    const increase = adjustInventory(ctx, {
+      date,
+      sizeId: sizes['10L'],
+      fromState: 'external',
+      toState: 'filled',
+      quantity: 7,
+      reason: 'Received seven cylinders from supplier',
+    })
+    expect(increase.number).toMatch(/^ADJ-/)
+    expect(listSizeBalances(ctx.db).find((item) => item.code === '10L')?.filled).toBe(47)
+
+    const decrease = adjustInventory(ctx, {
+      date,
+      sizeId: sizes['10L'],
+      fromState: 'filled',
+      toState: 'external',
+      quantity: 2,
+      reason: 'Removed two cylinders for disposal',
+    })
+    expect(decrease.number).toMatch(/^ADJ-/)
+    expect(listSizeBalances(ctx.db).find((item) => item.code === '10L')?.filled).toBe(45)
+    expect(consistencyProblems(ctx.db)).toEqual([])
+
+    const rows = ctx.sqlite
+      .prepare("SELECT filled_delta, remarks FROM inventory_movements WHERE movement_type = 'adjustment' ORDER BY id DESC LIMIT 2")
+      .all() as { filled_delta: number; remarks: string }[]
+    expect(rows).toEqual([
+      { filled_delta: -2, remarks: 'Removed two cylinders for disposal' },
+      { filled_delta: 7, remarks: 'Received seven cylinders from supplier' },
+    ])
+  })
+
+  it('allows stock increases and decreases without a reason', () => {
+    const { ctx, sizes, date } = boot()
+
+    adjustInventory(ctx, {
+      date,
+      sizeId: sizes['10L'],
+      fromState: 'external',
+      toState: 'filled',
+      quantity: 3,
+      reason: '',
+    })
+    adjustInventory(ctx, {
+      date,
+      sizeId: sizes['10L'],
+      fromState: 'filled',
+      toState: 'external',
+      quantity: 1,
+      reason: '',
+    })
+
+    const rows = ctx.sqlite
+      .prepare("SELECT remarks FROM inventory_movements WHERE movement_type = 'adjustment' ORDER BY id DESC LIMIT 2")
+      .all() as { remarks: string }[]
+    expect(rows).toEqual([{ remarks: 'Manual stock decrease' }, { remarks: 'Manual stock increase' }])
+    expect(consistencyProblems(ctx.db)).toEqual([])
+  })
+
   it('corrects opening stock after later movement without rewriting history', () => {
     const { ctx, sizes, date, customer } = boot()
     createDispatch(ctx, {
