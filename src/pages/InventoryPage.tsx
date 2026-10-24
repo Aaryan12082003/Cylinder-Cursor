@@ -43,8 +43,6 @@ export function InventoryPage() {
               <Stat label="Total stock" value={size.owned} />
               <Stat label="Available" value={size.available} />
               <Stat label="With customers" value={size.withCustomers} />
-              <Stat label="Filled" value={size.filled} />
-              <Stat label="Empty" value={size.empty} />
               <Stat label="Damaged" value={size.damaged} />
             </div>
             <div className="mt-3 flex justify-between text-xs text-muted">
@@ -112,8 +110,6 @@ function Stat({ label, value }: { label: string; value: number }) {
 
 function deltaSummary(row: { filledDelta: number; emptyDelta: number; withCustomerDelta: number; damagedDelta: number; lostDelta: number; maintenanceDelta: number }) {
   const parts = [
-    ['filled', row.filledDelta],
-    ['empty', row.emptyDelta],
     ['with customers', row.withCustomerDelta],
     ['damaged', row.damagedDelta],
     ['lost', row.lostDelta],
@@ -169,9 +165,7 @@ function OpeningDialog({ open, onOpenChange, sizes, onSaved }: { open: boolean; 
                   {size.name} {size.openingLocked ? <span className="text-xs font-normal text-muted">· audited correction</span> : null}
                 </div>
                 {size.openingLocked ? <p className="mb-2 text-xs text-muted">This opening balance is already posted. You can correct the audited opening values; later dispatches, returns, and adjustments are preserved.</p> : null}
-                <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
-                  <Field label="Filled"><Input value={value.filled} onChange={(event) => set('filled', event.target.value)} inputMode="numeric" /></Field>
-                  <Field label="Empty"><Input value={value.empty} onChange={(event) => set('empty', event.target.value)} inputMode="numeric" /></Field>
+                <div className="grid grid-cols-2 gap-2">
                   <Field label="Damaged"><Input value={value.damaged} onChange={(event) => set('damaged', event.target.value)} inputMode="numeric" /></Field>
                   <Field label="Maintenance"><Input value={value.maintenance} onChange={(event) => set('maintenance', event.target.value)} inputMode="numeric" /></Field>
                 </div>
@@ -207,7 +201,7 @@ function OpeningDialog({ open, onOpenChange, sizes, onSaved }: { open: boolean; 
 }
 
 function AdjustDialog({ open, onOpenChange, sizes, onSaved }: { open: boolean; onOpenChange: (open: boolean) => void; sizes: { id: number; name: string; isActive: boolean }[]; onSaved: () => void }) {
-  const [form, setForm] = useState({ date: todayIso(), sizeId: '', fromState: 'filled', toState: 'damaged', quantity: '1', reason: '' })
+  const [form, setForm] = useState({ date: todayIso(), sizeId: '', fromState: 'damaged', toState: 'maintenance', quantity: '1', reason: '' })
   const mutation = useMutation({
     mutationFn: api.adjust,
     onSuccess: (result) => {
@@ -218,8 +212,6 @@ function AdjustDialog({ open, onOpenChange, sizes, onSaved }: { open: boolean; o
     onError: (error: Error) => toast.error(error.message),
   })
   const states = [
-    ['filled', 'Filled available'],
-    ['empty', 'Empty available'],
     ['damaged', 'Damaged'],
     ['lost', 'Lost'],
     ['maintenance', 'Under maintenance'],

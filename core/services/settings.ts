@@ -183,6 +183,13 @@ export function updateCylinderSize(
   return inTx(ctx, (db) => {
     const current = db.select().from(cylinderSizes).where(eq(cylinderSizes.id, input.id)).get()
     if (!current) throw new BusinessError('Cylinder size not found.')
+    const code = clean(input.code, 12).toUpperCase()
+    const duplicate = db
+      .select({ id: cylinderSizes.id })
+      .from(cylinderSizes)
+      .where(sql`upper(${cylinderSizes.code}) = ${code} AND ${cylinderSizes.id} != ${input.id}`)
+      .get()
+    if (duplicate) throw new BusinessError('That cylinder size code already exists.')
     if (!input.isActive && current.isActive) {
       const balance = db.select().from(inventoryBalances).where(eq(inventoryBalances.sizeId, input.id)).get()
       const busy =
@@ -197,6 +204,7 @@ export function updateCylinderSize(
     const { createdAt } = stamp(ctx.now())
     db.update(cylinderSizes)
       .set({
+        code,
         name: clean(input.name, 40),
         capacityLitres: input.capacityLitres,
         isActive: input.isActive ? 1 : 0,
@@ -219,9 +227,6 @@ export function deleteCylinderSize(ctx: AppContext, id: number) {
   return inTx(ctx, (db) => {
     const current = db.select().from(cylinderSizes).where(eq(cylinderSizes.id, id)).get()
     if (!current) throw new BusinessError('Cylinder size not found.')
-    if (['3L', '10L', '23L'].includes(current.code)) {
-      throw new BusinessError('Default cylinder sizes cannot be deleted. Deactivate them instead when they are unused.')
-    }
     const balance = db.select().from(inventoryBalances).where(eq(inventoryBalances.sizeId, id)).get()
     const hasInventory = Boolean(
       balance &&

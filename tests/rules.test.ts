@@ -16,7 +16,7 @@ import { runReport } from '../core/services/reports'
 import { consistencyProblems } from '../core/services/stock'
 import { globalSearch } from '../core/services/search'
 import { loadDemoData, purgeDemoData } from '../core/services/demo'
-import { addCylinderSize, deleteCylinderSize } from '../core/services/settings'
+import { addCylinderSize, deleteCylinderSize, updateCylinderSize } from '../core/services/settings'
 import { tempContext } from './helpers'
 
 const open: { close: () => void }[] = []
@@ -135,10 +135,13 @@ describe('business rules', () => {
     expect(getCustomer(env.ctx, used.id).partyName).toBe('Used Customer')
   })
 
-  it('deletes unused custom cylinder sizes and protects used or default sizes', () => {
+  it('deletes unused cylinder sizes and protects sizes with history', () => {
     const env = tempContext(() => new Date('2026-10-22T10:00:00.000Z'))
     open.push(env)
     const unused = addCylinderSize(env.ctx, { code: '47L', name: '47 Litre', capacityLitres: 47 })
+    expect(updateCylinderSize(env.ctx, { id: unused.id, code: '47x', name: '47 Litre Updated', capacityLitres: 47, isActive: true })).toBe(true)
+    expect(env.ctx.sqlite.prepare('SELECT code, name FROM cylinder_sizes WHERE id = ?').get(unused.id)).toMatchObject({ code: '47X', name: '47 Litre Updated' })
+    expect(() => updateCylinderSize(env.ctx, { id: unused.id, code: '3l', name: 'Duplicate', capacityLitres: 47, isActive: true })).toThrow('already exists')
     const unrecorded = listSizeBalances(env.ctx.db).find((size) => size.id === unused.id)
     expect(unrecorded).toMatchObject({ hasOpening: false, openingFilled: 0, openingEmpty: 0 })
     expect(deleteCylinderSize(env.ctx, unused.id)).toEqual({ deleted: true })
@@ -148,7 +151,7 @@ describe('business rules', () => {
       rows: [{ sizeId: used.id, filled: 2, empty: 0, damaged: 0, maintenance: 0, notes: '' }],
     })
     expect(() => deleteCylinderSize(env.ctx, used.id)).toThrow('deactivate it instead')
-    expect(() => deleteCylinderSize(env.ctx, env.sizes['3L'])).toThrow('Default cylinder sizes cannot be deleted')
+    expect(deleteCylinderSize(env.ctx, env.sizes['3L'])).toEqual({ deleted: true })
   })
 
   it('loads and purges demonstration data without leaving records behind', () => {

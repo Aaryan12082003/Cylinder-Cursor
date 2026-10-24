@@ -35,7 +35,7 @@ export function DashboardPage() {
   const data = query.data
   const kpis = [
     { label: 'Total cylinders', value: data.totals.owned, hint: 'Owned by the company', icon: Boxes, tint: 'bg-indigo-50 text-primary' },
-    { label: 'Available cylinders', value: data.totals.available, hint: 'Filled and empty on hand', icon: Warehouse, tint: 'bg-emerald-50 text-emerald-600' },
+    { label: 'Available cylinders', value: data.totals.available, hint: 'Ready for dispatch', icon: Warehouse, tint: 'bg-emerald-50 text-emerald-600' },
     { label: 'With customers', value: data.totals.withCustomers, hint: `${data.totals.customersHolding} parties holding stock`, icon: Users, tint: 'bg-sky-50 text-sky-600' },
     { label: 'Active customers', value: data.totals.activeCustomers, hint: 'Not archived', icon: Users, tint: 'bg-violet-50 text-violet-600' },
     { label: 'Pending returns', value: data.totals.overdueCylinders, hint: `${data.totals.overdueCustomers} overdue parties`, icon: Undo2, tint: 'bg-amber-50 text-amber-600' },
@@ -68,10 +68,8 @@ export function DashboardPage() {
         ))}
       </div>
 
-      <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="mt-4 grid gap-3 sm:grid-cols-2">
         {[
-          ['Filled on hand', data.totals.filled],
-          ['Empty on hand', data.totals.empty],
           ['Damaged', data.totals.damaged],
           ['Lost', data.totals.lost],
         ].map(([label, value]) => (
@@ -94,9 +92,7 @@ export function DashboardPage() {
               <Metric label="Available" value={size.available} />
               <Metric label="With customers" value={size.withCustomers} />
             </div>
-            <div className="mt-4 grid grid-cols-3 gap-2 text-xs text-muted">
-              <span>Filled {formatCount(size.filled)}</span>
-              <span>Empty {formatCount(size.empty)}</span>
+            <div className="mt-4 text-xs text-muted">
               <span>Damaged {formatCount(size.damaged)}</span>
             </div>
           </Card>
