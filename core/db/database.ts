@@ -123,7 +123,7 @@ export function openDatabase(dbPath: string, options?: { now?: () => Date }): Ap
   const compatiblePath = resolveCompatibleDatabasePath(dbPath)
   const sqlite = new Database(compatiblePath)
   applyPragmas(sqlite)
-  migrate(sqlite)
+  migrateDatabase(sqlite)
   const ctx: AppContext = {
     sqlite,
     db: drizzle(sqlite, { schema }),
@@ -149,7 +149,7 @@ export function reconnect(ctx: AppContext) {
   ctx.db = drizzle(ctx.sqlite, { schema })
 }
 
-function migrate(sqlite: Database.Database) {
+export function migrateDatabase(sqlite: Database.Database) {
   const migrationColumns = sqlite
     .prepare(`PRAGMA table_info(schema_migrations)`)
     .all() as { name: string }[]
@@ -187,6 +187,14 @@ function ensureIncrementalSchema(sqlite: Database.Database) {
     sqlite.exec('ALTER TABLE customers ADD COLUMN alert_threshold_days INTEGER CHECK (alert_threshold_days >= 2 AND alert_threshold_days <= 3650)')
   }
   sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS routes (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL UNIQUE,
+      is_active INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_routes_active ON routes(is_active, name);
     CREATE TABLE IF NOT EXISTS cylinders (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       serial_number TEXT NOT NULL UNIQUE,
@@ -221,6 +229,11 @@ function ensureIncrementalSchema(sqlite: Database.Database) {
       PRIMARY KEY (return_item_id, cylinder_id)
     );
   `)
+  const dispatchColumns = columnNames(sqlite, 'dispatches')
+  if (!dispatchColumns.has('route_id')) sqlite.exec('ALTER TABLE dispatches ADD COLUMN route_id INTEGER REFERENCES routes(id)')
+  const returnColumns = columnNames(sqlite, 'returns')
+  if (!returnColumns.has('route_id')) sqlite.exec('ALTER TABLE returns ADD COLUMN route_id INTEGER REFERENCES routes(id)')
+  sqlite.exec('CREATE INDEX IF NOT EXISTS idx_dispatches_route ON dispatches(route_id); CREATE INDEX IF NOT EXISTS idx_returns_route ON returns(route_id)')
 }
 
 function seed(ctx: AppContext) {

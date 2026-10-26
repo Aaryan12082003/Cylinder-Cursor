@@ -5,7 +5,7 @@ import { desc, eq } from 'drizzle-orm'
 import { drizzle } from 'drizzle-orm/better-sqlite3'
 import { nowIso } from '@shared/dates'
 import type { BackupRecord } from '@shared/types'
-import { applyPragmas, type AppContext } from '../db/database'
+import { applyPragmas, migrateDatabase, type AppContext } from '../db/database'
 import { putSetting, setting } from '../db/database'
 import * as schema from '../db/schema'
 import { backupHistory } from '../db/schema'
@@ -130,6 +130,7 @@ export function restoreFromFile(ctx: AppContext, filePath: string) {
     removeSidecars(ctx.path)
     ctx.sqlite = new Database(ctx.path)
     applyPragmas(ctx.sqlite)
+    migrateDatabase(ctx.sqlite)
     ctx.db = drizzle(ctx.sqlite, { schema })
     const live = integrityCheck(ctx)
     if (!live.ok) throw new BusinessError('Restored database failed the integrity check. The previous database was put back.')
@@ -151,6 +152,7 @@ export function restoreFromFile(ctx: AppContext, filePath: string) {
     removeSidecars(ctx.path)
     ctx.sqlite = new Database(ctx.path)
     applyPragmas(ctx.sqlite)
+    migrateDatabase(ctx.sqlite)
     ctx.db = drizzle(ctx.sqlite, { schema })
     if (error instanceof BusinessError) throw error
     throw new BusinessError('Restore failed. The previous database was put back.')

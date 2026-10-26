@@ -145,6 +145,7 @@ export const dispatchLineSchema = z.object({
 export const dispatchSchema = z.object({
   date: dateSchema,
   customerId: z.number().int().positive(),
+  routeId: z.number().int().positive().nullable().optional(),
   vehicleNumber: optionalText(40),
   challanNumber: optionalText(60),
   driverName: optionalText(80),
@@ -173,12 +174,17 @@ export const serialListSchema = pageSchema.extend({
 export const returnSchema = z.object({
   date: dateSchema,
   customerId: z.number().int().positive(),
+  routeId: z.number().int().positive().nullable().optional(),
   challanReference: optionalText(60),
   remarks: optionalText(500),
   lines: z.array(returnLineSchema).min(1, 'Add at least one cylinder line').max(20),
   allowReconciliation: z.boolean().optional().default(false),
   reconciliationReason: optionalText(500),
 })
+
+export const routeCreateSchema = z.object({ name: z.string().trim().min(2).max(80) })
+export const routeUpdateSchema = routeCreateSchema.extend({ id: z.number().int().positive(), isActive: z.boolean() })
+export const routeDetailSchema = z.object({ routeId: z.number().int().positive(), search: z.string().trim().max(120).optional().default('') })
 
 export const reverseSchema = z.object({
   id: z.number().int().positive(),

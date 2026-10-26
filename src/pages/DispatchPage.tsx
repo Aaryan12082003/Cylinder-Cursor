@@ -19,20 +19,27 @@ export function DispatchPage() {
   const [form, setForm] = useState({
     date: todayIso(),
     customerId: params.get('customer') ?? '',
+    routeId: '',
     vehicleNumber: '',
     challanNumber: '',
     driverName: '',
     remarks: '',
   })
+  const [routeSearch, setRouteSearch] = useState('')
+  const [routeOpen, setRouteOpen] = useState(false)
+  const [routeDialog, setRouteDialog] = useState(false)
+  const [newRouteName, setNewRouteName] = useState('')
   const [lines, setLines] = useState<Line[]>([{ sizeId: '', quantity: '', condition: 'filled', serialNumbers: '' }])
   const [confirm, setConfirm] = useState(false)
   const [reverse, setReverse] = useState<number | null>(null)
   const [reason, setReason] = useState('')
   const sizes = settings.data?.sizes.filter((size) => size.isActive) ?? []
+  const routeOptions = settings.data?.routes.filter((route) => route.isActive && route.name.toLowerCase().includes(routeSearch.trim().toLowerCase())) ?? []
   const total = lines.reduce((sum, line) => sum + (Number(line.quantity) || 0), 0)
   const payload = useMemo(() => ({
     ...form,
     customerId: Number(form.customerId),
+    routeId: form.routeId ? Number(form.routeId) : null,
     lines: lines.filter((line) => line.sizeId && Number(line.quantity) > 0).map((line) => ({ sizeId: Number(line.sizeId), quantity: Number(line.quantity), condition: line.condition, serialNumbers: line.serialNumbers.split(/[\n,]+/).map((value) => value.trim()).filter(Boolean) })),
   }), [form, lines])
   const create = useMutation({
@@ -56,6 +63,18 @@ export function DispatchPage() {
     },
     onError: (error: Error) => toast.error(error.message),
   })
+  const addRoute = useMutation({
+    mutationFn: () => api.createRoute({ name: newRouteName.trim() }),
+    onSuccess: (route) => {
+      toast.success('Route added')
+      setForm((current) => ({ ...current, routeId: String(route.id) }))
+      setRouteSearch(route.name)
+      setNewRouteName('')
+      setRouteDialog(false)
+      qc.invalidateQueries({ queryKey: ['settings'] })
+    },
+    onError: (error: Error) => toast.error(error.message),
+  })
 
   return (
     <Page title="Dispatch cylinders" subtitle="Send one or more sizes in a single challan. Stock and customer balances update together.">
@@ -69,6 +88,22 @@ export function DispatchPage() {
                 <option value="">Choose customer</option>
                 {customers.data?.rows.map((customer) => <option key={customer.id} value={customer.id}>{customer.partyName}</option>)}
               </Select>
+            </Field>
+            <Field label="Route (optional)">
+              <div className="relative flex gap-2">
+                <Input role="combobox" aria-expanded={routeOpen} aria-controls="dispatch-route-options" placeholder="Search or choose route" value={routeSearch} onFocus={() => setRouteOpen(true)} onKeyDown={(event) => { if (event.key === 'Escape') setRouteOpen(false) }} onChange={(event) => {
+                  const value = event.target.value
+                  const match = settings.data?.routes.find((route) => route.isActive && route.name.toLowerCase() === value.trim().toLowerCase())
+                  setRouteSearch(value)
+                  setForm({ ...form, routeId: match ? String(match.id) : '' })
+                }} />
+                <Button type="button" variant="secondary" onClick={() => { setNewRouteName(routeSearch.trim()); setRouteDialog(true) }}>Add route</Button>
+                {routeOpen ? <div id="dispatch-route-options" role="listbox" className="absolute left-0 top-11 z-20 max-h-52 w-[calc(100%-92px)] overflow-auto rounded-lg border border-border bg-surface p-1 shadow-lg">
+                  <button type="button" role="option" aria-selected={!form.routeId} className="block w-full rounded px-3 py-2 text-left text-sm text-muted hover:bg-background" onMouseDown={(event) => event.preventDefault()} onClick={() => { setForm({ ...form, routeId: '' }); setRouteSearch(''); setRouteOpen(false) }}>No route</button>
+                  {routeOptions.map((route) => <button type="button" role="option" aria-selected={form.routeId === String(route.id)} key={route.id} className="block w-full rounded px-3 py-2 text-left text-sm hover:bg-background" onMouseDown={(event) => event.preventDefault()} onClick={() => { setForm({ ...form, routeId: String(route.id) }); setRouteSearch(route.name); setRouteOpen(false) }}>{route.name}</button>)}
+                  {routeOptions.length === 0 ? <div className="px-3 py-2 text-sm text-muted">No matching routes</div> : null}
+                </div> : null}
+              </div>
             </Field>
             <div className="space-y-2">
               {lines.map((line, index) => (
@@ -105,7 +140,7 @@ export function DispatchPage() {
                 <tr key={row.id} className="border-t border-border">
                   <td className="px-4 py-3 font-medium">{row.number}</td>
                   <td className="px-4 py-3">{formatDateOnly(row.date)}</td>
-                  <td className="px-4 py-3">{row.partyName}</td>
+                  <td className="px-4 py-3">{row.partyName}{row.routeName ? <div className="text-xs text-muted">{row.routeName}</div> : null}</td>
                   <td className="px-4 py-3">{row.totalQuantity}</td>
                   <td className="px-4 py-3">{row.reversedAt ? <Badge tone="warning">Reversed</Badge> : <Badge tone="success">Posted</Badge>}</td>
                   <td className="px-4 py-3 text-right">
@@ -132,6 +167,12 @@ export function DispatchPage() {
         <DialogContent title="Undo mistaken dispatch" description="The original document stays in history. This creates a reversal and restores stock only if the customer still holds those cylinders." className="max-w-md">
           <Field label="Reason"><Textarea value={reason} onChange={(event) => setReason(event.target.value)} /></Field>
           <div className="mt-4 flex justify-end"><Button variant="danger" onClick={() => undo.mutate()} disabled={reason.trim().length < 5}>Undo dispatch</Button></div>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={routeDialog} onOpenChange={(open) => { if (!open && !addRoute.isPending) setRouteDialog(false) }}>
+        <DialogContent title="Add route" description="Create a route and use it for this dispatch.">
+          <Field label="Route name"><Input autoFocus value={newRouteName} onChange={(event) => setNewRouteName(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && newRouteName.trim().length >= 2) addRoute.mutate() }} placeholder="e.g. Jaipur" /></Field>
+          <div className="mt-4 flex justify-end"><Button type="button" onClick={() => addRoute.mutate()} disabled={addRoute.isPending || newRouteName.trim().length < 2}>{addRoute.isPending ? 'Adding…' : 'Add and select'}</Button></div>
         </DialogContent>
       </Dialog>
     </Page>

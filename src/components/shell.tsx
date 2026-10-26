@@ -14,6 +14,7 @@ import {
   Truck,
   Undo2,
   Users,
+  MapPinned,
 } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
@@ -37,6 +38,7 @@ const groups = [
     items: [
       { to: '/dispatch', label: 'Dispatch Cylinders', icon: Truck },
       { to: '/returns', label: 'Receive Cylinders', icon: Undo2 },
+      { to: '/routes', label: 'Routes', icon: MapPinned },
       { to: '/ledger', label: 'Cylinder Ledger', icon: BookOpen },
       { to: '/outstanding', label: 'Outstanding', icon: Scale },
     ],
@@ -64,6 +66,7 @@ const crumbs: Record<string, string> = {
   '/customers': 'Customers',
   '/dispatch': 'Dispatch',
   '/returns': 'Receive',
+  '/routes': 'Routes',
   '/ledger': 'Ledger',
   '/outstanding': 'Outstanding',
   '/reports': 'Reports',

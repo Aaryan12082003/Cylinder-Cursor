@@ -18,6 +18,7 @@ import {
   openingBalances,
   reconciliations,
   returnItems,
+  routes,
 } from '../db/schema'
 import { BusinessError } from './errors'
 import { actorName, assertConsistent, stamp, writeAudit } from './stock'
@@ -39,6 +40,7 @@ function readLogo(filePath: string | null): string | null {
 export function getSettings(ctx: AppContext): AppSettings {
   const company = ctx.db.select().from(companies).get()
   const sizes = ctx.db.select().from(cylinderSizes).orderBy(cylinderSizes.sortOrder).all()
+  const routeRows = ctx.db.select().from(routes).orderBy(routes.name).all()
   return {
     overdueThresholdDays: Number(setting(ctx.db, 'overdue_threshold_days', '30')),
     dateFormat: setting(ctx.db, 'date_format', 'dd MMM yyyy'),
@@ -68,6 +70,7 @@ export function getSettings(ctx: AppContext): AppSettings {
       isActive: Boolean(size.isActive),
       sortOrder: size.sortOrder,
     })),
+    routes: routeRows.map((route) => ({ id: route.id, name: route.name, isActive: Boolean(route.isActive), createdAt: route.createdAt, updatedAt: route.updatedAt })),
   }
 }
 

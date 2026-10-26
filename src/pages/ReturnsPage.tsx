@@ -16,7 +16,7 @@ export function ReturnsPage() {
   const customers = useQuery({ queryKey: ['customers', 'all-open'], queryFn: () => api.customers({ page: 1, pageSize: 100, status: 'all', sortBy: 'partyName', sortDir: 'asc' }) })
   const [page, setPage] = useState(1)
   const history = useQuery({ queryKey: ['returns', page], queryFn: () => api.returns({ page, pageSize: 8, sortDir: 'desc' }) })
-  const [form, setForm] = useState({ date: todayIso(), customerId: params.get('customer') ?? '', challanReference: '', remarks: '', allowReconciliation: false, reconciliationReason: '' })
+  const [form, setForm] = useState({ date: todayIso(), customerId: params.get('customer') ?? '', routeId: '', challanReference: '', remarks: '', allowReconciliation: false, reconciliationReason: '' })
   const [lines, setLines] = useState<Line[]>([{ sizeId: '', quantity: '', condition: 'empty', serialNumbers: '' }])
   const [confirm, setConfirm] = useState(false)
   const [reverse, setReverse] = useState<number | null>(null)
@@ -26,6 +26,7 @@ export function ReturnsPage() {
   const payload = useMemo(() => ({
     ...form,
     customerId: Number(form.customerId),
+    routeId: form.routeId ? Number(form.routeId) : null,
     lines: lines.filter((line) => line.sizeId && Number(line.quantity) > 0).map((line) => ({ sizeId: Number(line.sizeId), quantity: Number(line.quantity), condition: line.condition, serialNumbers: line.serialNumbers.split(/[\n,]+/).map((value) => value.trim()).filter(Boolean) })),
   }), [form, lines])
   const create = useMutation({
@@ -57,6 +58,12 @@ export function ReturnsPage() {
               <Select value={form.customerId} onChange={(event) => setForm({ ...form, customerId: event.target.value })}>
                 <option value="">Choose customer</option>
                 {customers.data?.rows.map((customer) => <option key={customer.id} value={customer.id}>{customer.partyName}</option>)}
+              </Select>
+            </Field>
+            <Field label="Route (optional)">
+              <Select value={form.routeId} onChange={(event) => setForm({ ...form, routeId: event.target.value })}>
+                <option value="">Choose route</option>
+                {settings.data?.routes.filter((route) => route.isActive).map((route) => <option key={route.id} value={route.id}>{route.name}</option>)}
               </Select>
             </Field>
             {lines.map((line, index) => (
@@ -93,7 +100,7 @@ export function ReturnsPage() {
                 <tr key={row.id} className="border-t border-border">
                   <td className="px-4 py-3 font-medium">{row.number}</td>
                   <td className="px-4 py-3">{formatDateOnly(row.date)}</td>
-                  <td className="px-4 py-3">{row.partyName}</td>
+                  <td className="px-4 py-3">{row.partyName}{row.routeName ? <div className="text-xs text-muted">{row.routeName}</div> : null}</td>
                   <td className="px-4 py-3">{row.totalQuantity}</td>
                   <td className="px-4 py-3">{row.reversedAt ? <Badge tone="warning">Reversed</Badge> : <Badge tone="success">Posted</Badge>}</td>
                   <td className="px-4 py-3 text-right">{row.reversedAt ? null : <Button size="sm" variant="ghost" onClick={() => setReverse(row.id)}>Undo mistake</Button>}</td>

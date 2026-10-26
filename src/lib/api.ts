@@ -90,6 +90,11 @@ export const api = {
   loadDemo: () => call<{ loaded: boolean }>('demo:load'),
   purgeDemo: () => call<{ purged: boolean }>('demo:purge'),
   deleteAllData: (confirmation: string) => call<{ deleted: true; backupCleanupIncomplete: boolean }>('settings:deleteAllData', { confirmation }),
+  routes: () => call<{ id: number; name: string; isActive: boolean; createdAt: string; updatedAt: string }[]>('routes:list'),
+  createRoute: (payload: unknown) => call<{ id: number; name: string; isActive: boolean; createdAt: string; updatedAt: string }>('routes:create', payload),
+  updateRoute: (payload: unknown) => call<{ id: number; name: string; isActive: boolean; createdAt: string; updatedAt: string }>('routes:update', payload),
+  deleteRoute: (id: number) => call('routes:delete', { id }),
+  routeDetail: (payload: unknown) => call<import('@shared/types').RouteDetail>('routes:detail', payload),
   consistency: () => call<{ ok: boolean; problems: string[] }>('consistency:check'),
 }
 

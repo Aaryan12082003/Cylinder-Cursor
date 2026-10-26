@@ -29,6 +29,9 @@ import {
   settingsUpdateSchema,
   sizeCreateSchema,
   sizeUpdateSchema,
+  routeCreateSchema,
+  routeUpdateSchema,
+  routeDetailSchema,
 } from '@shared/schemas'
 import type { AppContext } from './db/database'
 import type { Host } from './host'
@@ -50,6 +53,7 @@ import { addCylinderSize, deleteCylinderSize, getSettings, saveLogo, updateCompa
 import { getDashboard } from './services/dashboard'
 import { purgeOperationalData } from './services/dataPurge'
 import { BusinessError } from './services/errors'
+import { createRoute, deleteRoute, listRoutes, routeDetail, updateRoute } from './services/routes'
 
 const outstandingSchema = pageSchema.extend({
   overdueOnly: z.boolean().optional().default(false),
@@ -162,6 +166,11 @@ export function buildHandlers(ctx: AppContext, host: Host): Record<Channel, (pay
       if (input.confirmation !== 'DELETE ALL DATA') throw new BusinessError('Type DELETE ALL DATA to confirm.')
       return purgeOperationalData(ctx)
     },
+    'routes:list': () => listRoutes(ctx),
+    'routes:create': (payload) => createRoute(ctx, parse(routeCreateSchema, payload)),
+    'routes:update': (payload) => updateRoute(ctx, parse(routeUpdateSchema, payload)),
+    'routes:delete': (payload) => deleteRoute(ctx, parse(idSchema, payload).id),
+    'routes:detail': (payload) => routeDetail(ctx, parse(routeDetailSchema, payload)),
     'search:global': (payload) => globalSearch(ctx, parse(searchSchema, payload).query),
     'backup:list': () => listBackups(ctx),
     'backup:create': async () => createBackup(ctx, defaultBackupDir(ctx), 'manual', 'Manual backup'),

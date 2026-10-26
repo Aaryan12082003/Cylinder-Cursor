@@ -11,6 +11,7 @@ import { NotificationsPage } from '@/pages/NotificationsPage'
 import { OutstandingPage } from '@/pages/OutstandingPage'
 import { ReportsPage } from '@/pages/ReportsPage'
 import { ReturnsPage } from '@/pages/ReturnsPage'
+import { RoutesPage } from '@/pages/RoutesPage'
 import { SettingsPage } from '@/pages/SettingsPage'
 
 export function App() {
@@ -22,6 +23,7 @@ export function App() {
         <Route path="/customers" element={<CustomersPage />} />
         <Route path="/dispatch" element={<DispatchPage />} />
         <Route path="/returns" element={<ReturnsPage />} />
+        <Route path="/routes" element={<RoutesPage />} />
         <Route path="/ledger" element={<LedgerPage />} />
         <Route path="/outstanding" element={<OutstandingPage />} />
         <Route path="/reports" element={<ReportsPage />} />

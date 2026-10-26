@@ -3,11 +3,12 @@ import type { DispatchInput, ReturnInput } from '@shared/schemas'
 import type { DispatchRow, Page, ReturnRow } from '@shared/types'
 import type { AppContext, Db } from '../db/database'
 import { inTx } from '../db/database'
-import { customerLedgerEntries, cylinderMovements, cylinders, cylinderSizes, customers, dispatchItemSerials, dispatchItems, dispatches, inventoryBalances, inventoryMovements, returnItemSerials, returnItems, returns } from '../db/schema'
+import { customerLedgerEntries, cylinderMovements, cylinders, cylinderSizes, customers, dispatchItemSerials, dispatchItems, dispatches, inventoryBalances, inventoryMovements, returnItemSerials, returnItems, returns, routes } from '../db/schema'
 import { BusinessError } from './errors'
 import { postReconciliation } from './inventory'
 import { ensureOverdueNotifications } from './notifications'
 import { clean, likePattern, nullIfEmpty } from './text'
+import { requireRoute } from './routes'
 import {
   actorName,
   applyInventory,
@@ -89,9 +90,10 @@ function normalizeDispatchAvailability(db: Db, sizeId: number, quantity: number,
 
 function loadDispatch(db: Db, id: number): DispatchRow {
   const row = db
-    .select({ dispatch: dispatches, partyName: customers.partyName })
+    .select({ dispatch: dispatches, partyName: customers.partyName, routeName: routes.name })
     .from(dispatches)
     .innerJoin(customers, eq(customers.id, dispatches.customerId))
+    .leftJoin(routes, eq(routes.id, dispatches.routeId))
     .where(eq(dispatches.id, id))
     .get()
   if (!row) throw new BusinessError('Dispatch not found.')
@@ -111,6 +113,8 @@ function loadDispatch(db: Db, id: number): DispatchRow {
     number: row.dispatch.number,
     date: row.dispatch.dispatchDate,
     customerId: row.dispatch.customerId,
+    routeId: row.dispatch.routeId ?? null,
+    routeName: row.routeName ?? '',
     partyName: row.partyName,
     vehicleNumber: row.dispatch.vehicleNumber ?? '',
     challanNumber: row.dispatch.challanNumber ?? '',
@@ -134,9 +138,10 @@ function loadDispatch(db: Db, id: number): DispatchRow {
 
 function loadReturn(db: Db, id: number): ReturnRow {
   const row = db
-    .select({ entry: returns, partyName: customers.partyName })
+    .select({ entry: returns, partyName: customers.partyName, routeName: routes.name })
     .from(returns)
     .innerJoin(customers, eq(customers.id, returns.customerId))
+    .leftJoin(routes, eq(routes.id, returns.routeId))
     .where(eq(returns.id, id))
     .get()
   if (!row) throw new BusinessError('Return not found.')
@@ -156,6 +161,8 @@ function loadReturn(db: Db, id: number): ReturnRow {
     number: row.entry.number,
     date: row.entry.returnDate,
     customerId: row.entry.customerId,
+    routeId: row.entry.routeId ?? null,
+    routeName: row.routeName ?? '',
     partyName: row.partyName,
     challanReference: row.entry.challanReference ?? '',
     remarks: row.entry.remarks ?? '',
@@ -188,6 +195,7 @@ export function createDispatch(ctx: AppContext, input: DispatchInput): DispatchR
     assertNotFuture(input.date, ctx.now())
     assertUniqueLines(input.lines)
     const customer = requireCustomer(db, input.customerId, { forDispatch: true })
+    const route = requireRoute(db, input.routeId)
     const { createdAt } = stamp(ctx.now())
     const actor = actorName(db)
     const number = nextNumber(db, 'dispatch', input.date, 'DSP')
@@ -198,6 +206,7 @@ export function createDispatch(ctx: AppContext, input: DispatchInput): DispatchR
         number,
         dispatchDate: input.date,
         customerId: customer.id,
+        routeId: route?.id ?? null,
         vehicleNumber: nullIfEmpty(input.vehicleNumber, 40),
         challanNumber: challan,
         driverName: nullIfEmpty(input.driverName, 80),
@@ -269,6 +278,7 @@ export function createReturn(ctx: AppContext, input: ReturnInput): ReturnRow {
     assertNotFuture(input.date, ctx.now())
     assertUniqueLines(input.lines)
     const customer = requireCustomer(db, input.customerId)
+    const route = requireRoute(db, input.routeId)
     const { createdAt } = stamp(ctx.now())
     const actor = actorName(db)
     const totals = new Map<number, number>()
@@ -306,6 +316,7 @@ export function createReturn(ctx: AppContext, input: ReturnInput): ReturnRow {
         number,
         returnDate: input.date,
         customerId: customer.id,
+        routeId: route?.id ?? null,
         challanReference: challan,
         remarks: nullIfEmpty(input.remarks, 500),
         createdBy: actor,

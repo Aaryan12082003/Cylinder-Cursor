@@ -12,6 +12,9 @@ export function SettingsPage() {
   const [size, setSize] = useState({ code: '', name: '', capacityLitres: '47' })
   const [deleteTarget, setDeleteTarget] = useState<AppSettings['sizes'][number] | null>(null)
   const [editTarget, setEditTarget] = useState<AppSettings['sizes'][number] | null>(null)
+  const [routeName, setRouteName] = useState('')
+  const [routeTarget, setRouteTarget] = useState<AppSettings['routes'][number] | null>(null)
+  const [routeEdit, setRouteEdit] = useState<AppSettings['routes'][number] | null>(null)
   const [deleteAllOpen, setDeleteAllOpen] = useState(false)
   const [deleteAllConfirmation, setDeleteAllConfirmation] = useState('')
   const [serialSizeId, setSerialSizeId] = useState('')
@@ -58,6 +61,21 @@ export function SettingsPage() {
       toast.success('Cylinder size updated')
       setEditTarget(null)
       qc.invalidateQueries()
+    },
+    onError: (error: Error) => toast.error(error.message),
+  })
+  const removeRoute = useMutation({
+    mutationFn: (id: number) => api.deleteRoute(id),
+    onSuccess: () => { toast.success('Route deleted'); setRouteTarget(null); qc.invalidateQueries() },
+    onError: (error: Error) => toast.error(error.message),
+  })
+  const addRoute = useMutation({
+    mutationFn: (name: string) => api.createRoute({ name }),
+    onSuccess: (route) => {
+      toast.success('Route added')
+      setRouteName('')
+      setDraft((current) => current ? { ...current, routes: [...current.routes, route].sort((a, b) => a.name.localeCompare(b.name)) } : current)
+      qc.invalidateQueries({ queryKey: ['settings'] })
     },
     onError: (error: Error) => toast.error(error.message),
   })
@@ -145,6 +163,22 @@ export function SettingsPage() {
           </div>
           <Button className="mt-3" variant="secondary" onClick={() => api.addSize({ code: size.code, name: size.name, capacityLitres: Number(size.capacityLitres) }).then(() => { toast.success('Size added'); setSize({ code: '', name: '', capacityLitres: '' }); qc.invalidateQueries() }).catch((error: Error) => toast.error(error.message))}>Add size</Button>
         </Card>
+        <Card className="p-5">
+          <h2 className="text-base font-semibold">Route master</h2>
+          <p className="mt-1 text-sm text-muted">Create routes such as Jaipur or Udaipur. Select an active route when recording dispatches and returns.</p>
+          <div className="mt-3 divide-y divide-border">
+            {draft.routes.map((route) => <div key={route.id} className="flex items-center justify-between py-2 text-sm">
+              <span>{route.name}{route.isActive ? null : <span className="ml-2 text-xs text-muted">Inactive</span>}</span>
+              <div className="flex items-center gap-1">
+                <Button size="sm" variant="ghost" onClick={() => setRouteEdit(route)}>Edit</Button>
+                <Button size="sm" variant="ghost" onClick={() => api.updateRoute({ ...route, isActive: !route.isActive }).then(() => qc.invalidateQueries()).catch((error: Error) => toast.error(error.message))}>{route.isActive ? 'Deactivate' : 'Activate'}</Button>
+                <Button size="sm" variant="ghost" className="text-danger" onClick={() => setRouteTarget(route)}>Delete</Button>
+              </div>
+            </div>)}
+            {draft.routes.length === 0 ? <p className="py-2 text-sm text-muted">No routes created yet.</p> : null}
+          </div>
+          <div className="mt-3 flex gap-2"><Input placeholder="Route name" value={routeName} onChange={(event) => setRouteName(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && routeName.trim().length >= 2) addRoute.mutate(routeName.trim()) }} /><Button type="button" variant="secondary" disabled={routeName.trim().length < 2 || addRoute.isPending} onClick={() => addRoute.mutate(routeName.trim())}>{addRoute.isPending ? 'Adding…' : 'Add route'}</Button></div>
+        </Card>
         <Card className="p-5 xl:col-span-2">
           <h2 className="text-base font-semibold">Serial-numbered cylinders</h2>
           <p className="mt-1 text-sm text-muted">Register individual cylinder serial numbers. Dispatch and return screens accept one serial per line when you want item-level tracking; quantity-only entries remain supported.</p>
@@ -188,6 +222,8 @@ export function SettingsPage() {
         danger
         onConfirm={() => { if (deleteTarget) removeSize.mutate(deleteTarget.id) }}
       />
+      <ConfirmDialog open={Boolean(routeTarget)} onOpenChange={(open) => { if (!open) setRouteTarget(null) }} title="Delete route?" body={routeTarget ? `${routeTarget.name} will be removed if it has no transaction history. Historical routes can be deactivated instead.` : ''} confirmLabel="Delete route" danger onConfirm={() => { if (routeTarget) removeRoute.mutate(routeTarget.id) }} disabled={removeRoute.isPending} />
+      <Dialog open={Boolean(routeEdit)} onOpenChange={(open) => { if (!open) setRouteEdit(null) }}><DialogContent title="Edit route" description="Rename a route or change its active status.">{routeEdit ? <div className="space-y-3"><Field label="Route name"><Input value={routeEdit.name} onChange={(event) => setRouteEdit({ ...routeEdit, name: event.target.value })} /></Field><div className="flex justify-end"><Button onClick={() => api.updateRoute(routeEdit).then(() => { toast.success('Route updated'); setRouteEdit(null); qc.invalidateQueries() }).catch((error: Error) => toast.error(error.message))}>Save changes</Button></div></div> : null}</DialogContent></Dialog>
       <Dialog open={Boolean(editTarget)} onOpenChange={(open) => { if (!open) setEditTarget(null) }}>
         <DialogContent title="Edit cylinder size" description="Update the label and capacity used throughout the application.">
           {editTarget ? <div className="space-y-3">

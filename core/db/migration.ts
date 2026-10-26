@@ -27,6 +27,14 @@ CREATE TABLE cylinder_sizes (
   created_at TEXT NOT NULL
 );
 
+CREATE TABLE routes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL UNIQUE,
+  is_active INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
 CREATE TABLE customers (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   code TEXT NOT NULL UNIQUE,
@@ -124,6 +132,7 @@ CREATE TABLE dispatches (
   number TEXT NOT NULL UNIQUE,
   dispatch_date TEXT NOT NULL,
   customer_id INTEGER NOT NULL REFERENCES customers(id),
+  route_id INTEGER REFERENCES routes(id),
   vehicle_number TEXT,
   challan_number TEXT,
   driver_name TEXT,
@@ -155,6 +164,7 @@ CREATE TABLE returns (
   number TEXT NOT NULL UNIQUE,
   return_date TEXT NOT NULL,
   customer_id INTEGER NOT NULL REFERENCES customers(id),
+  route_id INTEGER REFERENCES routes(id),
   challan_reference TEXT,
   remarks TEXT,
   created_by TEXT NOT NULL,
@@ -316,9 +326,11 @@ CREATE INDEX idx_movements_size ON inventory_movements(size_id, movement_date, i
 CREATE INDEX idx_movements_customer ON inventory_movements(customer_id);
 CREATE INDEX idx_dispatches_date ON dispatches(dispatch_date);
 CREATE INDEX idx_dispatches_customer ON dispatches(customer_id);
+CREATE INDEX idx_dispatches_route ON dispatches(route_id);
 CREATE INDEX idx_dispatches_challan ON dispatches(challan_number);
 CREATE INDEX idx_returns_date ON returns(return_date);
 CREATE INDEX idx_returns_customer ON returns(customer_id);
+CREATE INDEX idx_returns_route ON returns(route_id);
 CREATE INDEX idx_returns_challan ON returns(challan_reference);
 CREATE INDEX idx_audit_time ON audit_logs(occurred_at);
 CREATE INDEX idx_notifications_read ON notifications(read_at, created_at);

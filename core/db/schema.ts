@@ -28,6 +28,14 @@ export const cylinderSizes = sqliteTable('cylinder_sizes', {
   createdAt: text('created_at').notNull(),
 })
 
+export const routes = sqliteTable('routes', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  name: text('name').notNull().unique(),
+  isActive: integer('is_active').notNull().default(1),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+})
+
 export const cylinders = sqliteTable('cylinders', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   serialNumber: text('serial_number').notNull().unique(),
@@ -134,6 +142,7 @@ export const dispatches = sqliteTable('dispatches', {
   number: text('number').notNull().unique(),
   dispatchDate: text('dispatch_date').notNull(),
   customerId: integer('customer_id').notNull().references(() => customers.id),
+  routeId: integer('route_id').references(() => routes.id),
   vehicleNumber: text('vehicle_number'),
   challanNumber: text('challan_number'),
   driverName: text('driver_name'),
@@ -163,6 +172,7 @@ export const returns = sqliteTable('returns', {
   number: text('number').notNull().unique(),
   returnDate: text('return_date').notNull(),
   customerId: integer('customer_id').notNull().references(() => customers.id),
+  routeId: integer('route_id').references(() => routes.id),
   challanReference: text('challan_reference'),
   remarks: text('remarks'),
   createdBy: text('created_by').notNull(),

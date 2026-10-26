@@ -115,6 +115,8 @@ export type DispatchRow = {
   number: string
   date: string
   customerId: number
+  routeId: number | null
+  routeName: string
   partyName: string
   vehicleNumber: string
   challanNumber: string
@@ -133,6 +135,8 @@ export type ReturnRow = {
   number: string
   date: string
   customerId: number
+  routeId: number | null
+  routeName: string
   partyName: string
   challanReference: string
   remarks: string
@@ -264,6 +268,13 @@ export type AppSettings = {
   demoLoaded: boolean
   company: CompanyProfile
   sizes: { id: number; code: string; name: string; capacityLitres: number; isActive: boolean; sortOrder: number }[]
+  routes: { id: number; name: string; isActive: boolean; createdAt: string; updatedAt: string }[]
+}
+
+export type RouteDetail = {
+  route: { id: number; name: string; isActive: boolean }
+  holdings: { customerId: number; customerName: string; mobile: string; sizeName: string; serialNumbers: string[]; quantity: number }[]
+  history: { id: number; type: 'dispatch' | 'return'; number: string; date: string; customerName: string; quantity: number; challan: string; reversed: boolean }[]
 }
 
 export type BackupRecord = {
