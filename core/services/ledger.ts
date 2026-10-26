@@ -22,7 +22,7 @@ export type LedgerQuery = {
 
 export function holdingPositions(ctx: AppContext): OutstandingRow[] {
   const today = todayIso(ctx.now())
-  const threshold = Number(setting(ctx.db, 'overdue_threshold_days', '30'))
+  const defaultThreshold = Number(setting(ctx.db, 'overdue_threshold_days', '30'))
   const people = ctx.db.select().from(customers).all()
   const balanceMap = balancesFor(
     ctx.db,
@@ -52,6 +52,7 @@ export function holdingPositions(ctx: AppContext): OutstandingRow[] {
       const lastEntry = entryMap.get(person.id) ?? null
       const movement = [lastDispatchDate, lastReturnDate, lastEntry].filter((value): value is string => Boolean(value)).sort().at(-1) ?? null
       const daysSinceMovement = movement ? daysBetween(today, movement) : null
+      const alertThresholdDays = person.alertThresholdDays ?? defaultThreshold
       return {
         customerId: person.id,
         code: person.code,
@@ -64,7 +65,8 @@ export function holdingPositions(ctx: AppContext): OutstandingRow[] {
         lastDispatchDate,
         lastReturnDate,
         daysSinceMovement,
-        overdue: total > 0 && daysSinceMovement !== null && daysSinceMovement >= threshold,
+        alertThresholdDays,
+        overdue: total > 0 && daysSinceMovement !== null && daysSinceMovement >= alertThresholdDays,
       }
     })
     .filter((row) => row.total > 0)

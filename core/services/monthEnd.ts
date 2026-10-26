@@ -110,6 +110,7 @@ function createSnapshot(ctx: AppContext, db: Db, period: string) {
     )?.d ?? null
     const movement = [lastDispatch, lastReturn, lastEntry].filter((value): value is string => Boolean(value)).sort().at(-1) ?? null
     const days = movement ? daysBetween(asOf, movement) : null
+    const alertThreshold = person.alertThresholdDays ?? threshold
     items.push({
       customerId: person.id,
       customerName: person.partyName,
@@ -119,7 +120,7 @@ function createSnapshot(ctx: AppContext, db: Db, period: string) {
       lastDispatchDate: lastDispatch,
       lastReturnDate: lastReturn,
       daysSinceMovement: days,
-      overdue: days !== null && days >= threshold,
+      overdue: days !== null && days >= alertThreshold,
     })
   }
   const created = db

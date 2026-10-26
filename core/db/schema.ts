@@ -28,6 +28,28 @@ export const cylinderSizes = sqliteTable('cylinder_sizes', {
   createdAt: text('created_at').notNull(),
 })
 
+export const cylinders = sqliteTable('cylinders', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  serialNumber: text('serial_number').notNull().unique(),
+  sizeId: integer('size_id').notNull().references(() => cylinderSizes.id),
+  status: text('status').notNull().default('available'),
+  customerId: integer('customer_id').references(() => customers.id),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+})
+
+export const cylinderMovements = sqliteTable('cylinder_movements', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  cylinderId: integer('cylinder_id').notNull().references(() => cylinders.id),
+  movementDate: text('movement_date').notNull(),
+  movementType: text('movement_type').notNull(),
+  fromStatus: text('from_status'),
+  toStatus: text('to_status').notNull(),
+  customerId: integer('customer_id').references(() => customers.id),
+  referenceNumber: text('reference_number'),
+  createdAt: text('created_at').notNull(),
+})
+
 export const customers = sqliteTable('customers', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   code: text('code').notNull().unique(),
@@ -43,6 +65,7 @@ export const customers = sqliteTable('customers', {
   state: text('state'),
   pinCode: text('pin_code'),
   status: text('status').notNull().default('active'),
+  alertThresholdDays: integer('alert_threshold_days'),
   notes: text('notes'),
   isDemo: integer('is_demo').notNull().default(0),
   archivedAt: text('archived_at'),
@@ -130,6 +153,11 @@ export const dispatchItems = sqliteTable('dispatch_items', {
   condition: text('condition').notNull(),
 })
 
+export const dispatchItemSerials = sqliteTable('dispatch_item_serials', {
+  dispatchItemId: integer('dispatch_item_id').notNull().references(() => dispatchItems.id, { onDelete: 'cascade' }),
+  cylinderId: integer('cylinder_id').notNull().references(() => cylinders.id),
+}, (table) => [primaryKey({ columns: [table.dispatchItemId, table.cylinderId] })])
+
 export const returns = sqliteTable('returns', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   number: text('number').notNull().unique(),
@@ -151,6 +179,11 @@ export const returnItems = sqliteTable('return_items', {
   quantity: integer('quantity').notNull(),
   condition: text('condition').notNull(),
 })
+
+export const returnItemSerials = sqliteTable('return_item_serials', {
+  returnItemId: integer('return_item_id').notNull().references(() => returnItems.id, { onDelete: 'cascade' }),
+  cylinderId: integer('cylinder_id').notNull().references(() => cylinders.id),
+}, (table) => [primaryKey({ columns: [table.returnItemId, table.cylinderId] })])
 
 export const customerLedgerEntries = sqliteTable('customer_ledger_entries', {
   id: integer('id').primaryKey({ autoIncrement: true }),

@@ -164,9 +164,13 @@ function migrate(sqlite: Database.Database) {
     )
   `)
   const existing = sqlite.prepare('SELECT name FROM schema_migrations WHERE name = ?').get('001_init')
-  if (existing) return
+  if (existing) {
+    ensureIncrementalSchema(sqlite)
+    return
+  }
   if (classifyDatabaseSchema(sqlite) === 'current') {
     sqlite.prepare('INSERT INTO schema_migrations (name, applied_at) VALUES (?, ?)').run('001_init', new Date().toISOString())
+    ensureIncrementalSchema(sqlite)
     return
   }
   const run = sqlite.transaction(() => {
@@ -174,6 +178,49 @@ function migrate(sqlite: Database.Database) {
     sqlite.prepare('INSERT INTO schema_migrations (name, applied_at) VALUES (?, ?)').run('001_init', new Date().toISOString())
   })
   run()
+  ensureIncrementalSchema(sqlite)
+}
+
+function ensureIncrementalSchema(sqlite: Database.Database) {
+  const customerColumns = columnNames(sqlite, 'customers')
+  if (!customerColumns.has('alert_threshold_days')) {
+    sqlite.exec('ALTER TABLE customers ADD COLUMN alert_threshold_days INTEGER CHECK (alert_threshold_days >= 2 AND alert_threshold_days <= 3650)')
+  }
+  sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS cylinders (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      serial_number TEXT NOT NULL UNIQUE,
+      size_id INTEGER NOT NULL REFERENCES cylinder_sizes(id),
+      status TEXT NOT NULL DEFAULT 'available',
+      customer_id INTEGER REFERENCES customers(id),
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS cylinder_movements (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      cylinder_id INTEGER NOT NULL REFERENCES cylinders(id) ON DELETE CASCADE,
+      movement_date TEXT NOT NULL,
+      movement_type TEXT NOT NULL,
+      from_status TEXT,
+      to_status TEXT NOT NULL,
+      customer_id INTEGER REFERENCES customers(id),
+      reference_number TEXT,
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_cylinders_size_status ON cylinders(size_id, status);
+    CREATE INDEX IF NOT EXISTS idx_cylinders_customer ON cylinders(customer_id);
+    CREATE INDEX IF NOT EXISTS idx_cylinder_movements_cylinder ON cylinder_movements(cylinder_id, movement_date, id);
+    CREATE TABLE IF NOT EXISTS dispatch_item_serials (
+      dispatch_item_id INTEGER NOT NULL REFERENCES dispatch_items(id) ON DELETE CASCADE,
+      cylinder_id INTEGER NOT NULL REFERENCES cylinders(id),
+      PRIMARY KEY (dispatch_item_id, cylinder_id)
+    );
+    CREATE TABLE IF NOT EXISTS return_item_serials (
+      return_item_id INTEGER NOT NULL REFERENCES return_items(id) ON DELETE CASCADE,
+      cylinder_id INTEGER NOT NULL REFERENCES cylinders(id),
+      PRIMARY KEY (return_item_id, cylinder_id)
+    );
+  `)
 }
 
 function seed(ctx: AppContext) {

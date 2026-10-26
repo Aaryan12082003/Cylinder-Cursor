@@ -26,6 +26,7 @@ const emptyCustomer: CustomerCreateInput = {
   state: '',
   pinCode: '',
   status: 'active',
+  alertThresholdDays: null,
   notes: '',
   openingBalances: [],
 }
@@ -177,8 +178,9 @@ export function CustomersPage() {
         open={Boolean(deleteTarget)}
         onOpenChange={(open) => { if (!open) setDeleteTarget(null) }}
         title="Delete customer permanently?"
-        body={deleteTarget ? `${deleteTarget.partyName} will be permanently removed. This is only allowed when the customer has no balances, opening balances, or transaction history. Use Archive to keep historical records.` : ''}
+        body={deleteTarget ? `${deleteTarget.partyName} and all of its balances, dispatches, returns, ledger entries, and related history will be permanently deleted. Inventory balances will be recalculated. This cannot be undone.` : ''}
         confirmLabel={remove.isPending ? 'Deleting…' : 'Delete permanently'}
+        disabled={remove.isPending}
         danger
         onConfirm={() => { if (deleteTarget) remove.mutate(deleteTarget.id) }}
       />
@@ -240,6 +242,15 @@ function CustomerForm({ open, customer, sizes, onOpenChange }: { open: boolean; 
               <option value="inactive">Inactive</option>
             </Select>
           </Field>
+          <Field label="Overdue alert period">
+            <Select
+              value={form.watch('alertThresholdDays') == null ? '' : String(form.watch('alertThresholdDays'))}
+              onChange={(event) => form.setValue('alertThresholdDays', event.target.value ? Number(event.target.value) : null)}
+            >
+              <option value="">Use global default</option>
+              {[2, 5, 7, 14, 30].map((days) => <option key={days} value={days}>{days} days</option>)}
+            </Select>
+          </Field>
           <div className="md:col-span-2">
             <Field label="Notes"><Textarea {...form.register('notes')} /></Field>
           </div>
@@ -288,6 +299,7 @@ function CustomerProfile({ id, onClose, onEdit }: { id: number | null; onClose: 
             <Info label="Email" value={row.email} />
             <Info label="GSTIN" value={row.gstNumber} />
             <Info label="City" value={[row.city, row.state, row.pinCode].filter(Boolean).join(', ')} />
+            <Info label="Overdue alert" value={row.alertThresholdDays ? `${row.alertThresholdDays} days` : 'Global default'} />
             <Info label="Created" value={formatDateOnly(row.createdAt.slice(0, 10))} />
           </div>
           <div>

@@ -54,6 +54,7 @@ export const customerFieldsSchema = z.object({
   state: optionalText(80),
   pinCode: pin,
   status: z.enum(['active', 'inactive']).default('active'),
+  alertThresholdDays: z.number().int().min(2).max(3650).nullable().optional(),
   notes: optionalText(1000),
 })
 
@@ -85,10 +86,13 @@ export const customerListSchema = pageSchema.extend({
 
 export const stockLineSchema = z.object({
   sizeId: z.number().int().positive(),
-  filled: z.number().int().min(0).max(1_000_000),
-  empty: z.number().int().min(0).max(1_000_000),
-  damaged: z.number().int().min(0).max(1_000_000),
-  maintenance: z.number().int().min(0).max(1_000_000),
+  // `available` is the simplified stock model. Legacy condition fields stay
+  // optional so older backups and callers continue to parse safely.
+  available: z.number().int().min(0).max(1_000_000).optional(),
+  filled: z.number().int().min(0).max(1_000_000).optional().default(0),
+  empty: z.number().int().min(0).max(1_000_000).optional().default(0),
+  damaged: z.number().int().min(0).max(1_000_000).optional().default(0),
+  maintenance: z.number().int().min(0).max(1_000_000).optional().default(0),
   notes: optionalText(300),
 })
 
@@ -135,6 +139,7 @@ export const dispatchLineSchema = z.object({
   sizeId: z.number().int().positive(),
   quantity: z.number().int().positive().max(1_000_000),
   condition: z.enum(['filled', 'empty']),
+  serialNumbers: z.array(z.string().trim().min(1).max(80)).max(1000).optional(),
 })
 
 export const dispatchSchema = z.object({
@@ -151,6 +156,18 @@ export const returnLineSchema = z.object({
   sizeId: z.number().int().positive(),
   quantity: z.number().int().positive().max(1_000_000),
   condition: z.enum(['filled', 'empty', 'damaged', 'lost', 'maintenance']),
+  serialNumbers: z.array(z.string().trim().min(1).max(80)).max(1000).optional(),
+})
+
+export const serialRegistrationSchema = z.object({
+  sizeId: z.number().int().positive(),
+  serialNumbers: z.array(z.string().trim().min(1).max(80)).min(1).max(1000),
+})
+
+export const serialListSchema = pageSchema.extend({
+  sizeId: z.number().int().positive().optional(),
+  customerId: z.number().int().positive().optional(),
+  status: z.enum(['available', 'with_customer', 'damaged', 'lost', 'maintenance']).optional(),
 })
 
 export const returnSchema = z.object({
@@ -246,6 +263,10 @@ export const restoreSchema = z.object({
   confirmation: z.string(),
 })
 
+export const deleteAllDataSchema = z.object({
+  confirmation: z.string(),
+})
+
 export const auditListSchema = pageSchema.extend({
   search: z.string().max(120).optional().default(''),
   action: z.string().max(40).optional().default(''),
@@ -253,8 +274,16 @@ export const auditListSchema = pageSchema.extend({
 
 export type CustomerCreateInput = z.infer<typeof customerCreateSchema>
 export type CustomerUpdateInput = z.infer<typeof customerUpdateSchema>
-export type DispatchInput = z.infer<typeof dispatchSchema>
-export type ReturnInput = z.infer<typeof returnSchema>
+// Keep service inputs compatible with legacy callers that omit optional serial
+// lists; IPC parsing still applies the empty-array defaults.
+// Keep serials optional at the TypeScript boundary as well as at runtime so
+// legacy quantity-only documents remain source-compatible.
+export type DispatchInput = Omit<z.input<typeof dispatchSchema>, 'lines'> & {
+  lines: (Omit<z.input<typeof dispatchLineSchema>, 'serialNumbers'> & { serialNumbers?: string[] })[]
+}
+export type ReturnInput = Omit<z.input<typeof returnSchema>, 'lines'> & {
+  lines: (Omit<z.input<typeof returnLineSchema>, 'serialNumbers'> & { serialNumbers?: string[] })[]
+}
 export type AdjustmentInput = z.infer<typeof adjustmentSchema>
 export type ReconciliationInput = z.infer<typeof reconciliationSchema>
 export type OpeningStockInput = z.infer<typeof openingStockSchema>

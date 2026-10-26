@@ -20,7 +20,7 @@ import {
   returnItems,
 } from '../db/schema'
 import { BusinessError } from './errors'
-import { actorName, stamp, writeAudit } from './stock'
+import { actorName, assertConsistent, stamp, writeAudit } from './stock'
 import { clean, nullIfEmpty } from './text'
 
 function brandingDir(ctx: AppContext) {
@@ -227,33 +227,27 @@ export function deleteCylinderSize(ctx: AppContext, id: number) {
   return inTx(ctx, (db) => {
     const current = db.select().from(cylinderSizes).where(eq(cylinderSizes.id, id)).get()
     if (!current) throw new BusinessError('Cylinder size not found.')
-    const balance = db.select().from(inventoryBalances).where(eq(inventoryBalances.sizeId, id)).get()
-    const hasInventory = Boolean(
-      balance &&
-        (balance.filledAvailable ||
-          balance.emptyAvailable ||
-          balance.withCustomer ||
-          balance.damaged ||
-          balance.lost ||
-          balance.underMaintenance),
-    )
-    const references = [
-      ['inventory balances', hasInventory ? 1 : 0],
-      ['opening balances', db.select({ n: sql<number>`count(*)` }).from(openingBalances).where(eq(openingBalances.sizeId, id)).get()?.n],
-      ['customer balances', db.select({ n: sql<number>`count(*)` }).from(customerBalances).where(eq(customerBalances.sizeId, id)).get()?.n],
-      ['customer opening balances', db.select({ n: sql<number>`count(*)` }).from(customerOpeningBalances).where(eq(customerOpeningBalances.sizeId, id)).get()?.n],
-      ['dispatch items', db.select({ n: sql<number>`count(*)` }).from(dispatchItems).where(eq(dispatchItems.sizeId, id)).get()?.n],
-      ['return items', db.select({ n: sql<number>`count(*)` }).from(returnItems).where(eq(returnItems.sizeId, id)).get()?.n],
-      ['ledger entries', db.select({ n: sql<number>`count(*)` }).from(customerLedgerEntries).where(eq(customerLedgerEntries.sizeId, id)).get()?.n],
-      ['inventory movements', db.select({ n: sql<number>`count(*)` }).from(inventoryMovements).where(eq(inventoryMovements.sizeId, id)).get()?.n],
-      ['inventory adjustments', db.select({ n: sql<number>`count(*)` }).from(inventoryAdjustments).where(eq(inventoryAdjustments.sizeId, id)).get()?.n],
-      ['reconciliations', db.select({ n: sql<number>`count(*)` }).from(reconciliations).where(eq(reconciliations.sizeId, id)).get()?.n],
-    ] as const
-    const blocking = references.find(([, count]) => Number(count ?? 0) > 0)
-    if (blocking) {
-      throw new BusinessError(`Cannot delete ${current.name}. It has ${blocking[0]}; deactivate it instead to preserve the history.`)
-    }
     const { createdAt } = stamp(ctx.now())
+    // Permanent size deletion purges documents containing this size, then all
+    // size-scoped balances, movements, serials, and ledger records.
+    db.run(sql`DELETE FROM dispatch_item_serials WHERE dispatch_item_id IN (SELECT id FROM dispatch_items WHERE size_id = ${id})`)
+    db.run(sql`DELETE FROM return_item_serials WHERE return_item_id IN (SELECT id FROM return_items WHERE size_id = ${id})`)
+    db.run(sql`DELETE FROM dispatch_items WHERE size_id = ${id}`)
+    db.run(sql`DELETE FROM return_items WHERE size_id = ${id}`)
+    db.run(sql`DELETE FROM dispatches WHERE id NOT IN (SELECT DISTINCT dispatch_id FROM dispatch_items)`)
+    db.run(sql`DELETE FROM returns WHERE id NOT IN (SELECT DISTINCT return_id FROM return_items)`)
+    // Cylinder movement history is scoped by cylinder, not by customer. Do not
+    // remove a customer's movements for other cylinder sizes.
+    db.run(sql`DELETE FROM cylinder_movements WHERE cylinder_id IN (SELECT id FROM cylinders WHERE size_id = ${id})`)
+    db.run(sql`DELETE FROM cylinders WHERE size_id = ${id}`)
+    db.run(sql`DELETE FROM inventory_balances WHERE size_id = ${id}`)
+    db.run(sql`DELETE FROM opening_balances WHERE size_id = ${id}`)
+    db.run(sql`DELETE FROM customer_balances WHERE size_id = ${id}`)
+    db.run(sql`DELETE FROM customer_opening_balances WHERE size_id = ${id}`)
+    db.run(sql`DELETE FROM customer_ledger_entries WHERE size_id = ${id}`)
+    db.run(sql`DELETE FROM inventory_movements WHERE size_id = ${id}`)
+    db.run(sql`DELETE FROM inventory_adjustments WHERE size_id = ${id}`)
+    db.run(sql`DELETE FROM reconciliations WHERE size_id = ${id}`)
     db.delete(inventoryBalances).where(eq(inventoryBalances.sizeId, id)).run()
     db.delete(cylinderSizes).where(eq(cylinderSizes.id, id)).run()
     writeAudit(db, {
@@ -264,6 +258,7 @@ export function deleteCylinderSize(ctx: AppContext, id: number) {
       entityId: String(id),
       summary: `Cylinder size ${current.name} deleted.`,
     })
+    assertConsistent(db)
     return { deleted: true }
   })
 }

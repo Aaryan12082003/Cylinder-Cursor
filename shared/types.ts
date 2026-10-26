@@ -74,6 +74,7 @@ export type CustomerRow = {
   state: string
   pinCode: string
   status: 'active' | 'inactive'
+  alertThresholdDays: number | null
   notes: string
   isDemo: boolean
   archivedAt: string | null
@@ -124,7 +125,7 @@ export type DispatchRow = {
   reversedAt: string | null
   reversalReason: string
   totalQuantity: number
-  lines: { sizeId: number; sizeName: string; sizeCode: string; quantity: number; condition: string }[]
+  lines: { sizeId: number; sizeName: string; sizeCode: string; quantity: number; condition: string; serialNumbers?: string[] }[]
 }
 
 export type ReturnRow = {
@@ -140,7 +141,20 @@ export type ReturnRow = {
   reversedAt: string | null
   reversalReason: string
   totalQuantity: number
-  lines: { sizeId: number; sizeName: string; sizeCode: string; quantity: number; condition: string }[]
+  lines: { sizeId: number; sizeName: string; sizeCode: string; quantity: number; condition: string; serialNumbers?: string[] }[]
+}
+
+export type CylinderRow = {
+  id: number
+  serialNumber: string
+  sizeId: number
+  sizeName: string
+  sizeCode: string
+  status: 'available' | 'with_customer' | 'damaged' | 'lost' | 'maintenance'
+  customerId: number | null
+  customerName: string
+  createdAt: string
+  updatedAt: string
 }
 
 export type MovementRow = {
@@ -174,6 +188,7 @@ export type OutstandingRow = {
   lastDispatchDate: string | null
   lastReturnDate: string | null
   daysSinceMovement: number | null
+  alertThresholdDays: number
   overdue: boolean
 }
 

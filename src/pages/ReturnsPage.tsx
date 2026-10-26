@@ -7,7 +7,7 @@ import { toast } from 'sonner'
 import { Badge, Button, Card, ConfirmDialog, Dialog, DialogContent, EmptyState, Field, Input, Page, Pagination, Select, Textarea } from '@/components/ui'
 import { api } from '@/lib/api'
 
-type Line = { sizeId: string; quantity: string; condition: 'filled' | 'empty' | 'damaged' | 'lost' | 'maintenance' }
+type Line = { sizeId: string; quantity: string; condition: 'filled' | 'empty' | 'damaged' | 'lost' | 'maintenance'; serialNumbers: string }
 
 export function ReturnsPage() {
   const [params] = useSearchParams()
@@ -17,7 +17,7 @@ export function ReturnsPage() {
   const [page, setPage] = useState(1)
   const history = useQuery({ queryKey: ['returns', page], queryFn: () => api.returns({ page, pageSize: 8, sortDir: 'desc' }) })
   const [form, setForm] = useState({ date: todayIso(), customerId: params.get('customer') ?? '', challanReference: '', remarks: '', allowReconciliation: false, reconciliationReason: '' })
-  const [lines, setLines] = useState<Line[]>([{ sizeId: '', quantity: '', condition: 'empty' }])
+  const [lines, setLines] = useState<Line[]>([{ sizeId: '', quantity: '', condition: 'empty', serialNumbers: '' }])
   const [confirm, setConfirm] = useState(false)
   const [reverse, setReverse] = useState<number | null>(null)
   const [reason, setReason] = useState('')
@@ -26,7 +26,7 @@ export function ReturnsPage() {
   const payload = useMemo(() => ({
     ...form,
     customerId: Number(form.customerId),
-    lines: lines.filter((line) => line.sizeId && Number(line.quantity) > 0).map((line) => ({ sizeId: Number(line.sizeId), quantity: Number(line.quantity), condition: line.condition })),
+    lines: lines.filter((line) => line.sizeId && Number(line.quantity) > 0).map((line) => ({ sizeId: Number(line.sizeId), quantity: Number(line.quantity), condition: line.condition, serialNumbers: line.serialNumbers.split(/[\n,]+/).map((value) => value.trim()).filter(Boolean) })),
   }), [form, lines])
   const create = useMutation({
     mutationFn: () => api.createReturn(payload),
@@ -60,23 +60,17 @@ export function ReturnsPage() {
               </Select>
             </Field>
             {lines.map((line, index) => (
-              <div key={index} className="grid grid-cols-[1fr_88px_130px_32px] gap-2">
+              <div key={index} className="grid grid-cols-[1fr_88px_32px] gap-2">
                 <Select value={line.sizeId} onChange={(event) => setLines(lines.map((item, itemIndex) => itemIndex === index ? { ...item, sizeId: event.target.value } : item))}>
                   <option value="">Size</option>
                   {sizes.map((size) => <option key={size.id} value={size.id}>{size.name}</option>)}
                 </Select>
                 <Input value={line.quantity} inputMode="numeric" placeholder="Qty" onChange={(event) => setLines(lines.map((item, itemIndex) => itemIndex === index ? { ...item, quantity: event.target.value } : item))} />
-                <Select value={line.condition} onChange={(event) => setLines(lines.map((item, itemIndex) => itemIndex === index ? { ...item, condition: event.target.value as Line['condition'] } : item))}>
-                  <option value="empty">Empty</option>
-                  <option value="filled">Filled</option>
-                  <option value="damaged">Damaged</option>
-                  <option value="maintenance">Maintenance</option>
-                  <option value="lost">Lost</option>
-                </Select>
                 <button className="text-muted" aria-label="Remove line" onClick={() => setLines(lines.filter((_, item) => item !== index))}><Trash2 className="h-4 w-4" /></button>
+                <Textarea className="col-span-3 min-h-16" value={line.serialNumbers} placeholder="Serial numbers (optional, one per line)" onChange={(event) => setLines(lines.map((item, itemIndex) => itemIndex === index ? { ...item, serialNumbers: event.target.value } : item))} />
               </div>
             ))}
-            <Button variant="ghost" size="sm" onClick={() => setLines([...lines, { sizeId: '', quantity: '', condition: 'empty' }])}><Plus className="h-4 w-4" /> Add size</Button>
+            <Button variant="ghost" size="sm" onClick={() => setLines([...lines, { sizeId: '', quantity: '', condition: 'empty', serialNumbers: '' }])}><Plus className="h-4 w-4" /> Add size</Button>
             <Field label="Challan reference"><Input value={form.challanReference} onChange={(event) => setForm({ ...form, challanReference: event.target.value })} /></Field>
             <Field label="Remarks"><Textarea value={form.remarks} onChange={(event) => setForm({ ...form, remarks: event.target.value })} /></Field>
             <label className="flex items-center gap-2 text-sm">
@@ -91,7 +85,7 @@ export function ReturnsPage() {
           </div>
         </Card>
         <Card className="overflow-hidden">
-          <div className="border-b border-border px-4 py-3 text-sm font-semibold">Recent returns</div>
+          <div className="border-b border-border px-4 py-3"><div className="text-sm font-semibold">Recent returns</div><p className="mt-1 text-xs text-muted">Made a mistake? Use “Undo mistake” to reverse a posted return while keeping the audit history.</p></div>
           <table className="w-full text-left text-[13px]">
             <thead className="text-xs uppercase tracking-wide text-muted"><tr>{['Number', 'Date', 'Customer', 'Qty', 'Status', ''].map((label) => <th key={label} className="px-4 py-3 font-medium">{label}</th>)}</tr></thead>
             <tbody>
@@ -102,7 +96,7 @@ export function ReturnsPage() {
                   <td className="px-4 py-3">{row.partyName}</td>
                   <td className="px-4 py-3">{row.totalQuantity}</td>
                   <td className="px-4 py-3">{row.reversedAt ? <Badge tone="warning">Reversed</Badge> : <Badge tone="success">Posted</Badge>}</td>
-                  <td className="px-4 py-3 text-right">{row.reversedAt ? null : <Button size="sm" variant="ghost" onClick={() => setReverse(row.id)}>Reverse</Button>}</td>
+                  <td className="px-4 py-3 text-right">{row.reversedAt ? null : <Button size="sm" variant="ghost" onClick={() => setReverse(row.id)}>Undo mistake</Button>}</td>
                 </tr>
               ))}
             </tbody>
@@ -113,9 +107,9 @@ export function ReturnsPage() {
       </div>
       <ConfirmDialog open={confirm} onOpenChange={setConfirm} title="Confirm return" body={`Receive ${total} cylinders and update the customer balance.`} confirmLabel="Receive" onConfirm={() => create.mutate()} />
       <Dialog open={reverse !== null} onOpenChange={(open) => { if (!open) setReverse(null) }}>
-        <DialogContent title="Reverse return" description="Reversal puts the cylinders back with the customer if that stock condition still has them." className="max-w-md">
+        <DialogContent title="Undo mistaken return" description="The original document stays in history. This creates a reversal and puts the cylinders back with the customer if that stock condition still has them." className="max-w-md">
           <Field label="Reason"><Textarea value={reason} onChange={(event) => setReason(event.target.value)} /></Field>
-          <div className="mt-4 flex justify-end"><Button variant="danger" onClick={() => undo.mutate()} disabled={reason.trim().length < 5}>Reverse</Button></div>
+          <div className="mt-4 flex justify-end"><Button variant="danger" onClick={() => undo.mutate()} disabled={reason.trim().length < 5}>Undo return</Button></div>
         </DialogContent>
       </Dialog>
     </Page>

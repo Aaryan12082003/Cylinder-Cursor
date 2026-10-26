@@ -12,6 +12,11 @@ export function SettingsPage() {
   const [size, setSize] = useState({ code: '', name: '', capacityLitres: '47' })
   const [deleteTarget, setDeleteTarget] = useState<AppSettings['sizes'][number] | null>(null)
   const [editTarget, setEditTarget] = useState<AppSettings['sizes'][number] | null>(null)
+  const [deleteAllOpen, setDeleteAllOpen] = useState(false)
+  const [deleteAllConfirmation, setDeleteAllConfirmation] = useState('')
+  const [serialSizeId, setSerialSizeId] = useState('')
+  const [serialInput, setSerialInput] = useState('')
+  const serials = useQuery({ queryKey: ['cylinders', serialSizeId], queryFn: () => api.cylinders({ page: 1, pageSize: 100, sizeId: serialSizeId ? Number(serialSizeId) : undefined }), enabled: Boolean(draft) })
   useEffect(() => {
     if (query.data) setDraft(query.data)
   }, [query.data])
@@ -56,6 +61,16 @@ export function SettingsPage() {
     },
     onError: (error: Error) => toast.error(error.message),
   })
+  const deleteAll = useMutation({
+    mutationFn: (confirmation: string) => api.deleteAllData(confirmation),
+    onSuccess: (result) => {
+      toast.success(result.backupCleanupIncomplete ? 'All operational data deleted; some backup files could not be removed.' : 'All operational data deleted')
+      setDeleteAllOpen(false)
+      setDeleteAllConfirmation('')
+      qc.invalidateQueries()
+    },
+    onError: (error: Error) => toast.error(error.message),
+  })
   if (!draft) return <Page title="Settings" subtitle="Loading company preferences…" />
   const patch = (partial: Partial<AppSettings>) => setDraft({ ...draft, ...partial })
   return (
@@ -95,7 +110,12 @@ export function SettingsPage() {
               </Select>
             </Field>
           </div>
-          <Field label="Overdue holding period (days)"><Input type="number" value={draft.overdueThresholdDays} onChange={(event) => patch({ overdueThresholdDays: Number(event.target.value) })} /></Field>
+          <Field label="Notify when a party holds cylinders for">
+            <Select value={String(draft.overdueThresholdDays)} onChange={(event) => patch({ overdueThresholdDays: Number(event.target.value) })}>
+              {[2, 5, 7, 14, 30].map((days) => <option key={days} value={days}>{days} days</option>)}
+              {[2, 5, 7, 14, 30].includes(draft.overdueThresholdDays) ? null : <option value={draft.overdueThresholdDays}>{draft.overdueThresholdDays} days (current)</option>}
+            </Select>
+          </Field>
           <Field label="Backup retention"><Input type="number" value={draft.backupRetention} onChange={(event) => patch({ backupRetention: Number(event.target.value) })} /></Field>
           <div className="flex items-center justify-between text-sm"><span>Theme</span><Button variant="secondary" onClick={() => patch({ theme: draft.theme === 'dark' ? 'light' : 'dark' })}>{draft.theme === 'dark' ? 'Dark' : 'Light'}</Button></div>
           <div className="flex items-center justify-between text-sm"><span>Automatic backup on launch</span><Switch checked={draft.autoBackup} onCheckedChange={(autoBackup) => patch({ autoBackup })} /></div>
@@ -117,13 +137,26 @@ export function SettingsPage() {
               </div>
             ))}
           </div>
-          <p className="mt-2 text-xs text-muted">Edit any size. Delete is available when the size has no inventory or transaction history; used sizes must be deactivated instead.</p>
+          <p className="mt-2 text-xs text-muted">Edit any size. Permanent deletion removes all stock, serial, and transaction data for that size and recalculates balances. Use it only to remove a mistaken size.</p>
           <div className="mt-3 grid grid-cols-3 gap-2">
             <Input placeholder="Code" value={size.code} onChange={(event) => setSize({ ...size, code: event.target.value })} />
             <Input placeholder="Name" value={size.name} onChange={(event) => setSize({ ...size, name: event.target.value })} />
             <Input placeholder="Litres" value={size.capacityLitres} onChange={(event) => setSize({ ...size, capacityLitres: event.target.value })} />
           </div>
           <Button className="mt-3" variant="secondary" onClick={() => api.addSize({ code: size.code, name: size.name, capacityLitres: Number(size.capacityLitres) }).then(() => { toast.success('Size added'); setSize({ code: '', name: '', capacityLitres: '' }); qc.invalidateQueries() }).catch((error: Error) => toast.error(error.message))}>Add size</Button>
+        </Card>
+        <Card className="p-5 xl:col-span-2">
+          <h2 className="text-base font-semibold">Serial-numbered cylinders</h2>
+          <p className="mt-1 text-sm text-muted">Register individual cylinder serial numbers. Dispatch and return screens accept one serial per line when you want item-level tracking; quantity-only entries remain supported.</p>
+          <div className="mt-3 grid gap-3 md:grid-cols-[220px_1fr_auto]">
+            <Select value={serialSizeId} onChange={(event) => setSerialSizeId(event.target.value)}>
+              <option value="">Choose cylinder size</option>
+              {draft.sizes.filter((item) => item.isActive).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+            </Select>
+            <Textarea value={serialInput} onChange={(event) => setSerialInput(event.target.value)} placeholder="Enter serial numbers, one per line" className="min-h-16" />
+            <Button disabled={!serialSizeId || !serialInput.trim()} onClick={() => api.registerCylinders({ sizeId: Number(serialSizeId), serialNumbers: serialInput.split(/[\n,]+/).map((value) => value.trim()).filter(Boolean) }).then((result) => { toast.success(`${result.registered} serial number${result.registered === 1 ? '' : 's'} registered`); setSerialInput(''); serials.refetch() }).catch((error: Error) => toast.error(error.message))}>Register</Button>
+          </div>
+          {serials.data ? <div className="mt-4 overflow-auto"><table className="w-full text-left text-[13px]"><thead className="text-xs uppercase tracking-wide text-muted"><tr>{['Serial number', 'Size', 'Status', 'Party'].map((label) => <th key={label} className="px-3 py-2 font-medium">{label}</th>)}</tr></thead><tbody>{serials.data.rows.map((item) => <tr key={item.id} className="border-t border-border"><td className="px-3 py-2 font-medium">{item.serialNumber}</td><td className="px-3 py-2">{item.sizeName}</td><td className="px-3 py-2">{item.status.replaceAll('_', ' ')}</td><td className="px-3 py-2">{item.customerName || '—'}</td></tr>)}</tbody></table></div> : null}
         </Card>
         <Card className="space-y-3 p-5">
           <h2 className="text-base font-semibold">Data</h2>
@@ -135,13 +168,23 @@ export function SettingsPage() {
           </div>
           <p className="text-xs text-muted">Installed {draft.installedOn ? new Date(draft.installedOn).toLocaleString() : '—'}. Records stay in the Windows application data folder and survive updates.</p>
         </Card>
+        <Card className="space-y-3 border-red-200 bg-red-50/40 p-5 xl:col-span-2">
+          <div>
+            <h2 className="text-base font-semibold text-red-800">Delete all operational data</h2>
+            <p className="mt-1 text-sm text-red-700">Permanently removes all customers, inventory, dispatches, returns, balances, and operational history from this application. This cannot be undone.</p>
+          </div>
+          <div>
+            <Button variant="danger" onClick={() => setDeleteAllOpen(true)} disabled={deleteAll.isPending}>Delete all operational data</Button>
+          </div>
+        </Card>
       </div>
       <ConfirmDialog
         open={Boolean(deleteTarget)}
         onOpenChange={(open) => { if (!open) setDeleteTarget(null) }}
         title="Delete cylinder size permanently?"
-        body={deleteTarget ? `${deleteTarget.name} (${deleteTarget.code}) will be permanently removed. This is only allowed when it has never been used in inventory or transactions.` : ''}
+        body={deleteTarget ? `${deleteTarget.name} (${deleteTarget.code}) and all stock, serial numbers, movements, and transaction data for this size will be permanently deleted. Customer balances and inventory will be recalculated. This cannot be undone.` : ''}
         confirmLabel={removeSize.isPending ? 'Deleting…' : 'Delete permanently'}
+        disabled={removeSize.isPending}
         danger
         onConfirm={() => { if (deleteTarget) removeSize.mutate(deleteTarget.id) }}
       />
@@ -153,6 +196,30 @@ export function SettingsPage() {
             <Field label="Capacity (litres)"><Input type="number" value={editTarget.capacityLitres} onChange={(event) => setEditTarget({ ...editTarget, capacityLitres: Number(event.target.value) })} /></Field>
             <div className="flex justify-end"><Button disabled={editSize.isPending} onClick={() => editSize.mutate(editTarget)}>{editSize.isPending ? 'Saving…' : 'Save changes'}</Button></div>
           </div> : null}
+        </DialogContent>
+      </Dialog>
+      <Dialog open={deleteAllOpen} onOpenChange={(open) => { if (!open && !deleteAll.isPending) { setDeleteAllOpen(false); setDeleteAllConfirmation('') } }}>
+        <DialogContent title="Delete all operational data?" description="This is a permanent, destructive action. Review the warning carefully before continuing." className="max-w-lg">
+          <div className="space-y-4">
+            <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-800">
+              <p className="font-semibold">Everything operational will be erased.</p>
+              <p className="mt-1">Customers, cylinder records, inventory movements, dispatches, returns, balances, and related history will be permanently deleted. Do this only after creating a backup if you may need the records later.</p>
+            </div>
+            <Field label="Type DELETE ALL DATA to confirm">
+              <Input
+                value={deleteAllConfirmation}
+                onChange={(event) => setDeleteAllConfirmation(event.target.value)}
+                placeholder="DELETE ALL DATA"
+                autoComplete="off"
+                spellCheck={false}
+                disabled={deleteAll.isPending}
+              />
+            </Field>
+            <div className="flex justify-end gap-2">
+              <Button variant="secondary" onClick={() => { setDeleteAllOpen(false); setDeleteAllConfirmation('') }} disabled={deleteAll.isPending}>Cancel</Button>
+              <Button variant="danger" onClick={() => deleteAll.mutate(deleteAllConfirmation)} disabled={deleteAll.isPending || deleteAllConfirmation !== 'DELETE ALL DATA'}>{deleteAll.isPending ? 'Deleting…' : 'Delete everything permanently'}</Button>
+            </div>
+          </div>
         </DialogContent>
       </Dialog>
     </Page>

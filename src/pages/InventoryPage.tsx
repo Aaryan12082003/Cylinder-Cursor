@@ -17,19 +17,15 @@ export function InventoryPage() {
     queryKey: ['movements', page, sizeId],
     queryFn: () => api.movements({ page, pageSize: 10, sizeId: sizeId ? Number(sizeId) : undefined, sortDir: 'desc' }),
   })
-  const [openingOpen, setOpeningOpen] = useState(false)
-  const [adjustOpen, setAdjustOpen] = useState(false)
+  const [stockOpen, setStockOpen] = useState(false)
   const sizes = overview.data?.sizes ?? []
 
   return (
     <Page
       title="Cylinder inventory"
-      subtitle="Opening quantities, on-hand conditions, and every stock movement."
+      subtitle="Set active stock by size and track every stock movement."
       actions={
-        <>
-          <Button variant="secondary" onClick={() => setAdjustOpen(true)}>Adjust stock</Button>
-          <Button onClick={() => setOpeningOpen(true)}>Set opening balance</Button>
-        </>
+        <Button onClick={() => setStockOpen(true)}>Manage stock</Button>
       }
     >
       <div className="grid gap-4 xl:grid-cols-3">
@@ -43,11 +39,8 @@ export function InventoryPage() {
               <Stat label="Total stock" value={size.owned} />
               <Stat label="Available" value={size.available} />
               <Stat label="With customers" value={size.withCustomers} />
-              <Stat label="Damaged" value={size.damaged} />
             </div>
             <div className="mt-3 flex justify-between text-xs text-muted">
-              <span>Lost {formatCount(size.lost)}</span>
-              <span>Maintenance {formatCount(size.maintenance)}</span>
               <span>{size.openingLocked ? 'Opening locked' : size.hasOpening ? 'Opening recorded' : 'No opening yet'}</span>
             </div>
           </Card>
@@ -93,8 +86,7 @@ export function InventoryPage() {
         </table>
         <Pagination page={page} pageSize={10} total={movements.data?.total ?? 0} onPage={setPage} />
       </Card>
-      <OpeningDialog open={openingOpen} onOpenChange={setOpeningOpen} sizes={sizes} onSaved={() => qc.invalidateQueries()} />
-      <AdjustDialog open={adjustOpen} onOpenChange={setAdjustOpen} sizes={sizes} onSaved={() => qc.invalidateQueries()} />
+      <StockManagementDialog open={stockOpen} onOpenChange={setStockOpen} sizes={sizes} onSaved={() => qc.invalidateQueries()} />
     </Page>
   )
 }
@@ -110,12 +102,8 @@ function Stat({ label, value }: { label: string; value: number }) {
 
 function deltaSummary(row: { filledDelta: number; emptyDelta: number; withCustomerDelta: number; damagedDelta: number; lostDelta: number; maintenanceDelta: number }) {
   const parts = [
-    ['available stock', row.filledDelta],
-    ['empty stock', row.emptyDelta],
+    ['available stock', row.filledDelta + row.emptyDelta],
     ['with customers', row.withCustomerDelta],
-    ['damaged', row.damagedDelta],
-    ['lost', row.lostDelta],
-    ['maintenance', row.maintenanceDelta],
   ].filter(([, value]) => Number(value) !== 0)
   return parts.map(([label, value]) => `${Number(value) > 0 ? '+' : ''}${value} ${label}`).join(', ') || '—'
 }
@@ -123,6 +111,7 @@ function deltaSummary(row: { filledDelta: number; emptyDelta: number; withCustom
 type OpeningSize = {
   id: number
   name: string
+  isActive: boolean
   openingLocked: boolean
   hasOpening: boolean
   filled: number
@@ -135,31 +124,25 @@ type OpeningSize = {
   openingMaintenance?: number
 }
 
-function OpeningDialog({ open, onOpenChange, sizes, onSaved }: { open: boolean; onOpenChange: (open: boolean) => void; sizes: OpeningSize[]; onSaved: () => void }) {
-  const [rows, setRows] = useState<Record<number, { filled: string; empty: string; damaged: string; maintenance: string }>>({})
+function OpeningForm({ onClose, sizes, onSaved }: { onClose: () => void; sizes: OpeningSize[]; onSaved: () => void }) {
+  const [rows, setRows] = useState<Record<number, { available: string }>>({})
   const [notes, setNotes] = useState('')
   const mutation = useMutation({
     mutationFn: api.setOpening,
     onSuccess: () => {
       toast.success('Opening stock saved')
       onSaved()
-      onOpenChange(false)
+      onClose()
     },
     onError: (error: Error) => toast.error(error.message),
   })
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent title="Opening stock" description="Enter the cylinders currently on hand. Customer opening balances are recorded on each customer.">
         <div className="space-y-4">
+          <p className="text-xs text-muted">Enter the active stock currently available for each cylinder size. Later increases and decreases use this number.</p>
           {sizes.map((size) => {
             // Opening values are kept separately from current on-hand values so an
             // audited correction does not accidentally replace the live balance.
-            const value = rows[size.id] ?? {
-              filled: String(size.hasOpening ? size.openingFilled ?? 0 : size.filled ?? ''),
-              empty: String(size.hasOpening ? size.openingEmpty ?? 0 : size.empty ?? ''),
-              damaged: String(size.hasOpening ? size.openingDamaged ?? 0 : size.damaged ?? ''),
-              maintenance: String(size.hasOpening ? size.openingMaintenance ?? 0 : size.maintenance ?? ''),
-            }
+            const value = rows[size.id] ?? { available: String(size.hasOpening ? (size.openingFilled ?? 0) + (size.openingEmpty ?? 0) : (size.filled ?? 0) + (size.empty ?? 0)) }
             const set = (key: keyof typeof value, next: string) => setRows((current) => ({ ...current, [size.id]: { ...value, [key]: next } }))
             return (
               <div key={size.id} className="rounded-xl border border-border p-3">
@@ -167,10 +150,7 @@ function OpeningDialog({ open, onOpenChange, sizes, onSaved }: { open: boolean; 
                   {size.name} {size.openingLocked ? <span className="text-xs font-normal text-muted">· audited correction</span> : null}
                 </div>
                 {size.openingLocked ? <p className="mb-2 text-xs text-muted">This opening balance is already posted. You can correct the audited opening values; later dispatches, returns, and adjustments are preserved.</p> : null}
-                <div className="grid grid-cols-2 gap-2">
-                  <Field label="Damaged"><Input value={value.damaged} onChange={(event) => set('damaged', event.target.value)} inputMode="numeric" /></Field>
-                  <Field label="Maintenance"><Input value={value.maintenance} onChange={(event) => set('maintenance', event.target.value)} inputMode="numeric" /></Field>
-                </div>
+                <Field label="Active stock"><Input value={value.available} onChange={(event) => set('available', event.target.value)} inputMode="numeric" /></Field>
               </div>
             )
           })}
@@ -179,50 +159,40 @@ function OpeningDialog({ open, onOpenChange, sizes, onSaved }: { open: boolean; 
           <div className="flex justify-end">
             <Button
               onClick={() => mutation.mutate({
-                rows: sizes.map((size) => {
+                rows: sizes.filter((size) => rows[size.id]).map((size) => {
                   const value = rows[size.id]
+                  const available = Number(value?.available ?? (size.hasOpening ? (size.openingFilled ?? 0) + (size.openingEmpty ?? 0) : (size.filled ?? 0) + (size.empty ?? 0)))
                   return {
                     sizeId: size.id,
-                    filled: Number(value?.filled ?? (size.hasOpening ? size.openingFilled : size.filled) ?? 0),
-                    empty: Number(value?.empty ?? (size.hasOpening ? size.openingEmpty : size.empty) ?? 0),
-                    damaged: Number(value?.damaged ?? (size.hasOpening ? size.openingDamaged : size.damaged) ?? 0),
-                    maintenance: Number(value?.maintenance ?? (size.hasOpening ? size.openingMaintenance : size.maintenance) ?? 0),
+                    filled: Math.max(0, available),
+                    empty: 0,
+                    damaged: 0,
+                    maintenance: 0,
                     notes,
                   }
                 }),
               })}
-              disabled={mutation.isPending}
+              disabled={mutation.isPending || Object.keys(rows).length === 0}
             >
               Save opening stock
             </Button>
           </div>
         </div>
-      </DialogContent>
-    </Dialog>
   )
 }
 
-function AdjustDialog({ open, onOpenChange, sizes, onSaved }: { open: boolean; onOpenChange: (open: boolean) => void; sizes: { id: number; name: string; isActive: boolean }[]; onSaved: () => void }) {
-  const [form, setForm] = useState({ date: todayIso(), mode: 'increase' as 'increase' | 'decrease', sizeId: '', state: 'filled', quantity: '1', reason: '' })
+function AdjustForm({ onClose, sizes, onSaved }: { onClose: () => void; sizes: { id: number; name: string; isActive: boolean }[]; onSaved: () => void }) {
+  const [form, setForm] = useState({ date: todayIso(), mode: 'increase' as 'increase' | 'decrease', sizeId: '', quantity: '1', reason: '' })
   const mutation = useMutation({
     mutationFn: api.adjust,
     onSuccess: (result) => {
       toast.success(`${result.number} posted`)
       onSaved()
-      onOpenChange(false)
+      onClose()
     },
     onError: (error: Error) => toast.error(error.message),
   })
-  const states = [
-    ['filled', 'Available stock'],
-    ['damaged', 'Damaged'],
-    ['lost', 'Lost'],
-    ['maintenance', 'Under maintenance'],
-    ['external', 'Outside the books'],
-  ]
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent title="Increase or decrease stock" description="Choose the direction, cylinder size, condition, and quantity. Reason is optional; every change is posted to the audit history." className="max-w-lg">
         <div className="grid gap-3">
           <Field label="Date"><Input type="date" value={form.date} onChange={(event) => setForm({ ...form, date: event.target.value })} /></Field>
           <Field label="Stock action">
@@ -237,11 +207,6 @@ function AdjustDialog({ open, onOpenChange, sizes, onSaved }: { open: boolean; o
               {sizes.filter((size) => size.isActive).map((size) => <option key={size.id} value={size.id}>{size.name}</option>)}
             </Select>
           </Field>
-          <Field label="Stock condition">
-            <Select value={form.state} onChange={(event) => setForm({ ...form, state: event.target.value })}>
-              {states.filter(([value]) => value !== 'external').map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-            </Select>
-          </Field>
           <Field label="Quantity"><Input value={form.quantity} onChange={(event) => setForm({ ...form, quantity: event.target.value })} inputMode="numeric" /></Field>
           <Field label="Reason (optional)"><Textarea value={form.reason} onChange={(event) => setForm({ ...form, reason: event.target.value })} placeholder="Optional note" /></Field>
           <div className="flex justify-end">
@@ -250,8 +215,8 @@ function AdjustDialog({ open, onOpenChange, sizes, onSaved }: { open: boolean; o
               onClick={() => mutation.mutate({
                 date: form.date,
                 sizeId: Number(form.sizeId),
-                fromState: form.mode === 'increase' ? 'external' : form.state,
-                toState: form.mode === 'increase' ? form.state : 'external',
+                fromState: form.mode === 'increase' ? 'external' : 'filled',
+                toState: form.mode === 'increase' ? 'filled' : 'external',
                 quantity: Number(form.quantity),
                 reason: form.reason,
               })}
@@ -260,6 +225,31 @@ function AdjustDialog({ open, onOpenChange, sizes, onSaved }: { open: boolean; o
             </Button>
           </div>
         </div>
+  )
+}
+
+function StockManagementDialog({ open, onOpenChange, sizes, onSaved }: { open: boolean; onOpenChange: (open: boolean) => void; sizes: OpeningSize[]; onSaved: () => void }) {
+  const [section, setSection] = useState<'opening' | 'adjustment'>('opening')
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent
+        title="Manage stock"
+        description="Set active stock by size or increase and decrease it as stock changes."
+        className="max-w-2xl"
+      >
+        <div className="mb-5 grid grid-cols-2 rounded-xl bg-background p-1">
+          <Button type="button" variant={section === 'opening' ? 'primary' : 'secondary'} onClick={() => setSection('opening')}>
+            Opening balance
+          </Button>
+          <Button type="button" variant={section === 'adjustment' ? 'primary' : 'secondary'} onClick={() => setSection('adjustment')}>
+            Adjust stock
+          </Button>
+        </div>
+        {section === 'opening' ? (
+          <OpeningForm onClose={() => onOpenChange(false)} sizes={sizes} onSaved={onSaved} />
+        ) : (
+          <AdjustForm onClose={() => onOpenChange(false)} sizes={sizes} onSaved={onSaved} />
+        )}
       </DialogContent>
     </Dialog>
   )

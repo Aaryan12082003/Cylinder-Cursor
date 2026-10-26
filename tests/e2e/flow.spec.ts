@@ -2,9 +2,9 @@ import { expect, test } from '@playwright/test'
 
 test('opening stock, dispatch, and partial return update the live balances', async ({ page }) => {
   await page.goto('/#/inventory')
-  await page.getByRole('button', { name: 'Set opening balance' }).click()
-  const opening = page.getByRole('dialog', { name: 'Opening stock' })
-  const filled = opening.getByLabel('Filled')
+  await page.getByRole('button', { name: 'Manage stock' }).click()
+  const opening = page.getByRole('dialog', { name: 'Manage stock' })
+  const filled = opening.getByLabel('Available stock')
   await filled.nth(0).fill('100')
   await filled.nth(1).fill('200')
   await filled.nth(2).fill('300')

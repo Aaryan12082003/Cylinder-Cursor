@@ -427,9 +427,8 @@ function customerReport(ctx: AppContext, subtitle: string, dateFormat: string): 
   const sizes = listSizeBalances(ctx.db)
   const found = rows<Record<string, string | number | null>>(
     ctx,
-    `SELECT c.code, c.party_name, COALESCE(c.contact_person, '') AS contact, COALESCE(c.mobile, '') AS mobile,
-            COALESCE(c.email, '') AS email, COALESCE(c.gst_number, '') AS gst, COALESCE(c.city, '') AS city,
-            COALESCE(c.state, '') AS state, c.status, c.created_at,
+    `SELECT c.code, c.party_name, COALESCE(c.contact_person, '') AS contact,
+            c.status, c.created_at,
             CASE WHEN c.archived_at IS NULL THEN 'No' ELSE 'Yes' END AS archived
      FROM customers c
      ORDER BY c.party_name COLLATE NOCASE`,
@@ -449,9 +448,6 @@ function customerReport(ctx: AppContext, subtitle: string, dateFormat: string): 
       { key: 'code', label: 'Customer ID' },
       { key: 'party_name', label: 'Party name' },
       { key: 'contact', label: 'Contact' },
-      { key: 'mobile', label: 'Mobile' },
-      { key: 'city', label: 'City' },
-      { key: 'gst', label: 'GSTIN' },
       ...sizes.map((size) => ({ key: size.code, label: size.name, align: 'right' as const })),
       { key: 'total', label: 'Total', align: 'right' },
       { key: 'status', label: 'Status' },

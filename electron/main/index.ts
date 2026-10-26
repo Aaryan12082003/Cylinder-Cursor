@@ -10,6 +10,7 @@ import { invokeHandler } from '@core/invoke'
 import { openDatabase, type AppContext } from '@core/db/database'
 import { autoBackup } from '@core/services/backup'
 import { ensureMonthEnd } from '@core/services/monthEnd'
+import { ensureOverdueNotifications } from '@core/services/notifications'
 import { getSettings } from '@core/services/settings'
 
 const isDev = !app.isPackaged
@@ -232,13 +233,19 @@ function startDevBridge(handlers: ReturnType<typeof buildHandlers>) {
 function publishMonthEnd() {
   if (!ctx || !mainWindow) return
   const created = ensureMonthEnd(ctx)
+  const overdue = ensureOverdueNotifications(ctx)
   const settings = getSettings(ctx)
   if (settings.notifyNative) {
     for (const note of created.notifications) {
       if (Notification.isSupported()) new Notification({ title: note.title, body: note.body }).show()
     }
+    for (const note of overdue) {
+      if (Notification.isSupported()) new Notification({ title: note.title, body: note.body }).show()
+    }
   }
-  if (created.periods.length) mainWindow.webContents.send('app-event', { type: 'month-end', periods: created.periods })
+  if (created.periods.length || overdue.length) {
+    mainWindow.webContents.send('app-event', { type: 'notifications', periods: created.periods, overdue: overdue.map((note) => note.customerId) })
+  }
 }
 
 const gotLock = app.requestSingleInstanceLock()

@@ -9,6 +9,7 @@ import {
   customerOpeningBalances,
   customers,
   cylinderSizes,
+  dispatchItems,
   dispatches,
   inventoryMovements,
   monthEndSnapshotItems,
@@ -83,6 +84,7 @@ export function toCustomerRow(
     state: text(row.state),
     pinCode: text(row.pinCode),
     status: row.status === 'inactive' ? 'inactive' : 'active',
+    alertThresholdDays: row.alertThresholdDays ?? null,
     notes: text(row.notes),
     isDemo: Boolean(row.isDemo),
     archivedAt: row.archivedAt,
@@ -175,6 +177,7 @@ function customerValues(input: CustomerCreateInput | CustomerUpdateInput, update
     state: nullIfEmpty(input.state, 80),
     pinCode: nullIfEmpty(input.pinCode, 6),
     status: input.status,
+    alertThresholdDays: input.alertThresholdDays ?? null,
     notes: nullIfEmpty(input.notes, 1000),
     updatedAt,
   }
@@ -291,30 +294,76 @@ export function setCustomerArchived(ctx: AppContext, id: number, archived: boole
 export function deleteCustomer(ctx: AppContext, id: number) {
   return inTx(ctx, (db) => {
     const current = requireCustomer(db, id)
-    const references = [
-      ['customer balances', db.select({ n: sql<number>`count(*)` }).from(customerBalances).where(eq(customerBalances.customerId, id)).get()?.n],
-      ['opening balances', db.select({ n: sql<number>`count(*)` }).from(customerOpeningBalances).where(eq(customerOpeningBalances.customerId, id)).get()?.n],
-      ['ledger entries', db.select({ n: sql<number>`count(*)` }).from(customerLedgerEntries).where(eq(customerLedgerEntries.customerId, id)).get()?.n],
-      ['dispatches', db.select({ n: sql<number>`count(*)` }).from(dispatches).where(eq(dispatches.customerId, id)).get()?.n],
-      ['returns', db.select({ n: sql<number>`count(*)` }).from(returns).where(eq(returns.customerId, id)).get()?.n],
-      ['inventory movements', db.select({ n: sql<number>`count(*)` }).from(inventoryMovements).where(eq(inventoryMovements.customerId, id)).get()?.n],
-      ['reconciliations', db.select({ n: sql<number>`count(*)` }).from(reconciliations).where(eq(reconciliations.customerId, id)).get()?.n],
-      ['month-end snapshots', db.select({ n: sql<number>`count(*)` }).from(monthEndSnapshotItems).where(eq(monthEndSnapshotItems.customerId, id)).get()?.n],
-    ] as const
-    const blocking = references.find(([, count]) => Number(count ?? 0) > 0)
-    if (blocking) {
-      throw new BusinessError(`Cannot delete ${current.partyName}. It has ${blocking[0]}; archive it instead to preserve the history.`)
-    }
     const { createdAt } = stamp(ctx.now())
+    // A permanent customer delete is an explicit data purge. Return serialised
+    // cylinders to available stock and remove the customer's documents and
+    // balances so inventory totals do not retain an orphaned holding.
+    const balances = db.select().from(customerBalances).where(eq(customerBalances.customerId, id)).all()
+    for (const balance of balances) {
+      if (balance.outstanding <= 0) continue
+      const dispatchTotals = db
+        .select({
+          filled: sql<number>`coalesce(sum(case when ${dispatchItems.condition} = 'filled' then ${dispatchItems.quantity} else 0 end), 0)`,
+          empty: sql<number>`coalesce(sum(case when ${dispatchItems.condition} = 'empty' then ${dispatchItems.quantity} else 0 end), 0)`,
+        })
+        .from(dispatchItems)
+        .innerJoin(dispatches, eq(dispatches.id, dispatchItems.dispatchId))
+        .where(and(eq(dispatches.customerId, id), eq(dispatchItems.sizeId, balance.sizeId)))
+        .get()
+      const filled = Number(dispatchTotals?.filled ?? 0)
+      const empty = Number(dispatchTotals?.empty ?? 0)
+      const opening = db.select({ quantity: customerOpeningBalances.quantity }).from(customerOpeningBalances)
+        .where(and(eq(customerOpeningBalances.customerId, id), eq(customerOpeningBalances.sizeId, balance.sizeId))).get()
+      const openingQuantity = Number(opening?.quantity ?? 0)
+      if (filled === 0 && empty === 0 && openingQuantity > 0) {
+        // Customer opening balances predate condition-level tracking; use the
+        // normal available bucket rather than leaving stock orphaned.
+        db.run(sql`UPDATE inventory_balances SET filled_available = filled_available + ${balance.outstanding}, with_customer = MAX(0, with_customer - ${balance.outstanding}), updated_at = ${createdAt} WHERE size_id = ${balance.sizeId}`)
+        db.insert(inventoryMovements).values({ sizeId: balance.sizeId, customerId: null, movementDate: createdAt.slice(0, 10), movementType: 'customer_purge', referenceNumber: current.code, filledDelta: balance.outstanding, emptyDelta: 0, withCustomerDelta: 0, damagedDelta: 0, lostDelta: 0, maintenanceDelta: 0, remarks: `Purged customer ${current.partyName}`, createdAt }).run()
+        continue
+      }
+      if ((filled > 0 && empty > 0) || (filled === 0 && empty === 0)) {
+        throw new BusinessError('This customer has an outstanding balance whose cylinder condition cannot be determined safely. Clear or reconcile the balance before permanently deleting the customer.')
+      }
+      if (filled > 0) {
+        db.run(sql`UPDATE inventory_balances SET filled_available = filled_available + ${balance.outstanding}, with_customer = MAX(0, with_customer - ${balance.outstanding}), updated_at = ${createdAt} WHERE size_id = ${balance.sizeId}`)
+        db.insert(inventoryMovements).values({ sizeId: balance.sizeId, customerId: null, movementDate: createdAt.slice(0, 10), movementType: 'customer_purge', referenceNumber: current.code, filledDelta: balance.outstanding, emptyDelta: 0, withCustomerDelta: 0, damagedDelta: 0, lostDelta: 0, maintenanceDelta: 0, remarks: `Purged customer ${current.partyName}`, createdAt }).run()
+      } else {
+        db.run(sql`UPDATE inventory_balances SET empty_available = empty_available + ${balance.outstanding}, with_customer = MAX(0, with_customer - ${balance.outstanding}), updated_at = ${createdAt} WHERE size_id = ${balance.sizeId}`)
+        db.insert(inventoryMovements).values({ sizeId: balance.sizeId, customerId: null, movementDate: createdAt.slice(0, 10), movementType: 'customer_purge', referenceNumber: current.code, filledDelta: 0, emptyDelta: balance.outstanding, withCustomerDelta: 0, damagedDelta: 0, lostDelta: 0, maintenanceDelta: 0, remarks: `Purged customer ${current.partyName}`, createdAt }).run()
+      }
+    }
+    db.run(sql`UPDATE cylinders SET status = 'available', customer_id = NULL, updated_at = ${createdAt} WHERE customer_id = ${id}`)
+    // Keep the global movement trail intact while removing the customer's
+    // identity from it; serial ownership/movements are still reset below.
+    db.run(sql`UPDATE cylinder_movements SET customer_id = NULL WHERE customer_id = ${id}`)
+    db.run(sql`DELETE FROM dispatch_item_serials WHERE dispatch_item_id IN (SELECT id FROM dispatch_items WHERE dispatch_id IN (SELECT id FROM dispatches WHERE customer_id = ${id}))`)
+    db.run(sql`DELETE FROM return_item_serials WHERE return_item_id IN (SELECT id FROM return_items WHERE return_id IN (SELECT id FROM returns WHERE customer_id = ${id}))`)
+    db.run(sql`DELETE FROM dispatch_items WHERE dispatch_id IN (SELECT id FROM dispatches WHERE customer_id = ${id})`)
+    db.run(sql`DELETE FROM return_items WHERE return_id IN (SELECT id FROM returns WHERE customer_id = ${id})`)
+    db.run(sql`DELETE FROM dispatches WHERE customer_id = ${id}`)
+    db.run(sql`DELETE FROM returns WHERE customer_id = ${id}`)
+    db.run(sql`DELETE FROM customer_ledger_entries WHERE customer_id = ${id}`)
+    db.run(sql`DELETE FROM customer_opening_balances WHERE customer_id = ${id}`)
+    // For sizes with an outstanding balance, replace the customer's original
+    // movements with the explicit purge movement above. Zero-balance history
+    // is anonymised rather than removed so stock totals remain consistent.
+    db.run(sql`DELETE FROM inventory_movements WHERE customer_id = ${id} AND size_id IN (SELECT size_id FROM customer_balances WHERE customer_id = ${id} AND outstanding > 0)`)
+    db.run(sql`UPDATE inventory_movements SET customer_id = NULL WHERE customer_id = ${id}`)
+    db.run(sql`DELETE FROM customer_balances WHERE customer_id = ${id}`)
+    db.run(sql`DELETE FROM reconciliations WHERE customer_id = ${id}`)
+    db.run(sql`DELETE FROM month_end_snapshot_items WHERE customer_id = ${id}`)
+    db.run(sql`UPDATE month_end_snapshots SET customer_count = (SELECT count(*) FROM month_end_snapshot_items WHERE snapshot_id = month_end_snapshots.id), total_with_customers = coalesce((SELECT sum(total_outstanding) FROM month_end_snapshot_items WHERE snapshot_id = month_end_snapshots.id), 0)`)
     db.delete(customers).where(eq(customers.id, id)).run()
     writeAudit(db, {
       occurredAt: createdAt,
       actor: actorName(db),
-      action: 'customer_delete',
+      action: 'customer_purge',
       entityType: 'customer',
       entityId: String(id),
-      summary: `Customer ${current.code} ${current.partyName} deleted.`,
+      summary: `Customer ${current.code} ${current.partyName} and all related records were permanently deleted.`,
     })
+    assertConsistent(db)
     return { deleted: true }
   })
 }

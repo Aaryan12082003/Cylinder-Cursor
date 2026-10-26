@@ -112,6 +112,12 @@ export function setOpeningBalances(ctx: AppContext, input: OpeningStockInput) {
     assertUniqueLines(input.rows.map((row) => ({ sizeId: row.sizeId, condition: 'opening' })))
     for (const row of input.rows) {
       const size = requireSize(db, row.sizeId)
+      const simplified = row.available !== undefined
+      const available = row.available ?? (row.filled ?? 0) + (row.empty ?? 0)
+      const filled = simplified ? available : (row.filled ?? 0)
+      const empty = simplified ? 0 : (row.empty ?? 0)
+      const damaged = simplified ? 0 : (row.damaged ?? 0)
+      const maintenance = simplified ? 0 : (row.maintenance ?? 0)
       const other = db
         .select({ n: sql<number>`count(*)` })
         .from(inventoryMovements)
@@ -128,10 +134,10 @@ export function setOpeningBalances(ctx: AppContext, input: OpeningStockInput) {
           throw new BusinessError(`Enter a reason when correcting opening stock for ${size.name}.`)
         }
         const deltas: Deltas = {
-          filled: row.filled - existingOpening.filledQuantity,
-          empty: row.empty - existingOpening.emptyQuantity,
-          damaged: row.damaged - existingOpening.damagedQuantity,
-          maintenance: row.maintenance - existingOpening.maintenanceQuantity,
+          filled: filled - existingOpening.filledQuantity,
+          empty: empty - existingOpening.emptyQuantity,
+          damaged: damaged - existingOpening.damagedQuantity,
+          maintenance: maintenance - existingOpening.maintenanceQuantity,
         }
         applyInventory(db, {
           sizeId: row.sizeId,
@@ -143,10 +149,10 @@ export function setOpeningBalances(ctx: AppContext, input: OpeningStockInput) {
         })
         db.update(openingBalances)
           .set({
-            filledQuantity: row.filled,
-            emptyQuantity: row.empty,
-            damagedQuantity: row.damaged,
-            maintenanceQuantity: row.maintenance,
+            filledQuantity: filled,
+            emptyQuantity: empty,
+            damagedQuantity: damaged,
+            maintenanceQuantity: maintenance,
             notes: nullIfEmpty(row.notes, 300),
             createdBy: actor,
             recordedAt: createdAt,
@@ -168,10 +174,10 @@ export function setOpeningBalances(ctx: AppContext, input: OpeningStockInput) {
               maintenance: existingOpening.maintenanceQuantity,
             },
             next: {
-              filled: row.filled,
-              empty: row.empty,
-              damaged: row.damaged,
-              maintenance: row.maintenance,
+          filled,
+          empty,
+          damaged,
+          maintenance,
             },
             deltas,
             reason: correctionNotes,
@@ -189,10 +195,10 @@ export function setOpeningBalances(ctx: AppContext, input: OpeningStockInput) {
       }
       db.update(inventoryBalances)
         .set({
-          filledAvailable: row.filled,
-          emptyAvailable: row.empty,
-          damaged: row.damaged,
-          underMaintenance: row.maintenance,
+          filledAvailable: filled,
+          emptyAvailable: empty,
+          damaged,
+          underMaintenance: maintenance,
           withCustomer: 0,
           lost: 0,
           updatedAt: createdAt,
@@ -202,10 +208,10 @@ export function setOpeningBalances(ctx: AppContext, input: OpeningStockInput) {
       db.insert(openingBalances)
         .values({
           sizeId: row.sizeId,
-          filledQuantity: row.filled,
-          emptyQuantity: row.empty,
-          damagedQuantity: row.damaged,
-          maintenanceQuantity: row.maintenance,
+          filledQuantity: filled,
+          emptyQuantity: empty,
+          damagedQuantity: damaged,
+          maintenanceQuantity: maintenance,
           notes: nullIfEmpty(row.notes, 300),
           createdBy: actor,
           recordedAt: createdAt,
@@ -216,12 +222,12 @@ export function setOpeningBalances(ctx: AppContext, input: OpeningStockInput) {
           sizeId: row.sizeId,
           movementDate: today,
           movementType: 'opening_stock',
-          filledDelta: row.filled,
-          emptyDelta: row.empty,
+          filledDelta: filled,
+          emptyDelta: empty,
           withCustomerDelta: 0,
-          damagedDelta: row.damaged,
+          damagedDelta: damaged,
           lostDelta: 0,
-          maintenanceDelta: row.maintenance,
+          maintenanceDelta: maintenance,
           remarks: nullIfEmpty(row.notes, 300),
           createdAt,
         })
@@ -232,7 +238,7 @@ export function setOpeningBalances(ctx: AppContext, input: OpeningStockInput) {
         action: 'opening_stock',
         entityType: 'cylinder_size',
         entityId: String(row.sizeId),
-        summary: `Opening stock set for ${size.name}: ${row.filled} filled, ${row.empty} empty, ${row.damaged} damaged, ${row.maintenance} under maintenance.`,
+        summary: `Opening stock set for ${size.name}: ${filled + empty} available.`,
       })
     }
     assertConsistent(db)
@@ -254,7 +260,18 @@ export function adjustInventory(ctx: AppContext, input: AdjustmentInput) {
           ? 'Manual stock decrease'
           : 'Manual stock adjustment')
     const deltas: Deltas = {}
-    if (input.fromState !== 'external') deltas[input.fromState as StateKey] = -input.quantity
+    // The simplified workflow treats filled and empty as one available pool.
+    // When decreasing stock, consume filled first and then any legacy empty stock.
+    if (input.fromState === 'filled' && input.toState === 'external') {
+      const balance = db.select().from(inventoryBalances).where(eq(inventoryBalances.sizeId, input.sizeId)).get()
+      const filledAvailable = Number(balance?.filledAvailable ?? 0)
+      const fromFilled = Math.min(input.quantity, filledAvailable)
+      const fromEmpty = input.quantity - fromFilled
+      if (fromFilled > 0) deltas.filled = -fromFilled
+      if (fromEmpty > 0) deltas.empty = -fromEmpty
+    } else if (input.fromState !== 'external') {
+      deltas[input.fromState as StateKey] = -input.quantity
+    }
     if (input.toState !== 'external') {
       const key = input.toState as StateKey
       deltas[key] = (deltas[key] ?? 0) + input.quantity

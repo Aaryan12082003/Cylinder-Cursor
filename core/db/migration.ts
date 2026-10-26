@@ -42,11 +42,34 @@ CREATE TABLE customers (
   state TEXT,
   pin_code TEXT,
   status TEXT NOT NULL DEFAULT 'active',
+  alert_threshold_days INTEGER CHECK (alert_threshold_days >= 2 AND alert_threshold_days <= 3650),
   notes TEXT,
   is_demo INTEGER NOT NULL DEFAULT 0,
   archived_at TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
+);
+
+CREATE TABLE cylinders (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  serial_number TEXT NOT NULL UNIQUE,
+  size_id INTEGER NOT NULL REFERENCES cylinder_sizes(id),
+  status TEXT NOT NULL DEFAULT 'available' CHECK (status IN ('available', 'with_customer', 'damaged', 'lost', 'maintenance')),
+  customer_id INTEGER REFERENCES customers(id),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE cylinder_movements (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  cylinder_id INTEGER NOT NULL REFERENCES cylinders(id) ON DELETE CASCADE,
+  movement_date TEXT NOT NULL,
+  movement_type TEXT NOT NULL,
+  from_status TEXT,
+  to_status TEXT NOT NULL,
+  customer_id INTEGER REFERENCES customers(id),
+  reference_number TEXT,
+  created_at TEXT NOT NULL
 );
 
 CREATE TABLE inventory_balances (
@@ -121,6 +144,12 @@ CREATE TABLE dispatch_items (
   UNIQUE (dispatch_id, size_id, condition)
 );
 
+CREATE TABLE dispatch_item_serials (
+  dispatch_item_id INTEGER NOT NULL REFERENCES dispatch_items(id) ON DELETE CASCADE,
+  cylinder_id INTEGER NOT NULL REFERENCES cylinders(id),
+  PRIMARY KEY (dispatch_item_id, cylinder_id)
+);
+
 CREATE TABLE returns (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   number TEXT NOT NULL UNIQUE,
@@ -142,6 +171,12 @@ CREATE TABLE return_items (
   quantity INTEGER NOT NULL CHECK (quantity > 0),
   condition TEXT NOT NULL CHECK (condition IN ('filled', 'empty', 'damaged', 'lost', 'maintenance')),
   UNIQUE (return_id, size_id, condition)
+);
+
+CREATE TABLE return_item_serials (
+  return_item_id INTEGER NOT NULL REFERENCES return_items(id) ON DELETE CASCADE,
+  cylinder_id INTEGER NOT NULL REFERENCES cylinders(id),
+  PRIMARY KEY (return_item_id, cylinder_id)
 );
 
 CREATE TABLE customer_ledger_entries (
@@ -272,6 +307,9 @@ CREATE TABLE backup_history (
 CREATE INDEX idx_customers_party ON customers(party_name);
 CREATE INDEX idx_customers_mobile ON customers(mobile);
 CREATE INDEX idx_customers_status ON customers(status, archived_at);
+CREATE INDEX idx_cylinders_size_status ON cylinders(size_id, status);
+CREATE INDEX idx_cylinders_customer ON cylinders(customer_id);
+CREATE INDEX idx_cylinder_movements_cylinder ON cylinder_movements(cylinder_id, movement_date, id);
 CREATE INDEX idx_ledger_customer ON customer_ledger_entries(customer_id, entry_date, id);
 CREATE INDEX idx_ledger_size ON customer_ledger_entries(size_id);
 CREATE INDEX idx_movements_size ON inventory_movements(size_id, movement_date, id);

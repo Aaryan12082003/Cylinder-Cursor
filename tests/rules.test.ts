@@ -10,7 +10,8 @@ import { createCustomer, deleteCustomer, getCustomer, listCustomers } from '../c
 import { createDispatch, createReturn, reverseDispatch } from '../core/services/documents'
 import { adjustInventory, listSizeBalances, reconcileCustomer, setOpeningBalances } from '../core/services/inventory'
 import { ensureMonthEnd, getMonthEnd } from '../core/services/monthEnd'
-import { unreadCount } from '../core/services/notifications'
+import { ensureOverdueNotifications, unreadCount } from '../core/services/notifications'
+import { holdingPositions } from '../core/services/ledger'
 import { reportToExcel, reportToPdf } from '../core/services/exports'
 import { runReport } from '../core/services/reports'
 import { consistencyProblems } from '../core/services/stock'
@@ -93,7 +94,7 @@ describe('business rules', () => {
     expect(resolveCompatibleDatabasePath(dbPath)).toBe(ctx.path)
   })
 
-  it('deletes an unused customer but preserves customers with history', () => {
+  it('permanently deletes customers and recalculates their balances', () => {
     const env = tempContext(() => new Date('2026-10-22T10:00:00.000Z'))
     open.push(env)
     const unused = createCustomer(env.ctx, {
@@ -131,11 +132,35 @@ describe('business rules', () => {
       notes: '',
       openingBalances: [{ sizeId: env.sizes['3L'], quantity: 1 }],
     })
-    expect(() => deleteCustomer(env.ctx, used.id)).toThrow('archive it instead')
-    expect(getCustomer(env.ctx, used.id).partyName).toBe('Used Customer')
+    expect(deleteCustomer(env.ctx, used.id)).toEqual({ deleted: true })
+    expect(() => getCustomer(env.ctx, used.id)).toThrow('Customer not found')
   })
 
-  it('deletes unused cylinder sizes and protects sizes with history', () => {
+  it('purges a customer after its dispatches and returns have balanced to zero', () => {
+    const env = boot(() => new Date('2026-10-22T10:00:00.000Z'))
+    createDispatch(env.ctx, {
+      date: env.date,
+      customerId: env.customer.id,
+      vehicleNumber: '',
+      challanNumber: '',
+      driverName: '',
+      remarks: '',
+      lines: [{ sizeId: env.sizes['3L'], quantity: 5, condition: 'filled' }],
+    })
+    createReturn(env.ctx, {
+      date: env.date,
+      customerId: env.customer.id,
+      challanReference: '',
+      remarks: '',
+      lines: [{ sizeId: env.sizes['3L'], quantity: 5, condition: 'filled' }],
+      allowReconciliation: false,
+      reconciliationReason: '',
+    })
+    expect(deleteCustomer(env.ctx, env.customer.id)).toEqual({ deleted: true })
+    expect(consistencyProblems(env.ctx.db)).toEqual([])
+  })
+
+  it('permanently deletes cylinder sizes with their history', () => {
     const env = tempContext(() => new Date('2026-10-22T10:00:00.000Z'))
     open.push(env)
     const unused = addCylinderSize(env.ctx, { code: '47L', name: '47 Litre', capacityLitres: 47 })
@@ -150,7 +175,7 @@ describe('business rules', () => {
     setOpeningBalances(env.ctx, {
       rows: [{ sizeId: used.id, filled: 2, empty: 0, damaged: 0, maintenance: 0, notes: '' }],
     })
-    expect(() => deleteCylinderSize(env.ctx, used.id)).toThrow('deactivate it instead')
+    expect(deleteCylinderSize(env.ctx, used.id)).toEqual({ deleted: true })
     expect(deleteCylinderSize(env.ctx, env.sizes['3L'])).toEqual({ deleted: true })
   })
 
@@ -431,6 +456,72 @@ describe('business rules', () => {
     expect(listCustomers(ctx, { page: 1, pageSize: 10, search: '%', status: 'all' }).total).toBe(0)
     expect(globalSearch(ctx, "' OR 1=1 --")).toEqual([])
     expect(globalSearch(ctx, 'Harbour').length).toBeGreaterThan(0)
+  })
+})
+
+describe('overdue holding notifications', () => {
+  it('uses a customer-specific alert period when configured', () => {
+    let current = new Date('2026-10-10T09:00:00.000Z')
+    const env = boot(() => current)
+    env.ctx.sqlite.prepare('UPDATE customers SET alert_threshold_days = ? WHERE id = ?').run(2, env.customer.id)
+    createDispatch(env.ctx, {
+      date: '2026-10-10',
+      customerId: env.customer.id,
+      vehicleNumber: '',
+      challanNumber: '',
+      driverName: '',
+      remarks: '',
+      lines: [{ sizeId: env.sizes['3L'], quantity: 1, condition: 'filled' }],
+    })
+    current = new Date('2026-10-13T09:00:00.000Z')
+    const row = holdingPositions(env.ctx).find((item) => item.customerId === env.customer.id)
+    expect(row).toMatchObject({ alertThresholdDays: 2, overdue: true })
+  })
+
+  it('alerts per party and allows a new alert after a later dispatch', () => {
+    let current = new Date('2026-10-10T09:00:00.000Z')
+    const env = boot(() => current)
+    env.ctx.sqlite.prepare("UPDATE application_settings SET value = '2' WHERE key = 'overdue_threshold_days'").run()
+    createDispatch(env.ctx, {
+      date: '2026-10-10',
+      customerId: env.customer.id,
+      vehicleNumber: '',
+      challanNumber: '',
+      driverName: '',
+      remarks: '',
+      lines: [{ sizeId: env.sizes['3L'], quantity: 1, condition: 'filled' }],
+    })
+
+    current = new Date('2026-10-15T09:00:00.000Z')
+    const first = ensureOverdueNotifications(env.ctx)
+    expect(first).toHaveLength(1)
+    expect(first[0]?.title).toContain('Harbour Metals')
+    expect(first[0]?.body).toContain('5 days')
+    expect(ensureOverdueNotifications(env.ctx)).toEqual([])
+
+    createReturn(env.ctx, {
+      date: '2026-10-15',
+      customerId: env.customer.id,
+      challanReference: '',
+      remarks: '',
+      lines: [{ sizeId: env.sizes['3L'], quantity: 3, condition: 'filled' }],
+      allowReconciliation: false,
+      reconciliationReason: '',
+    })
+    expect(unreadCount(env.ctx)).toBe(0)
+
+    current = new Date('2026-10-16T09:00:00.000Z')
+    createDispatch(env.ctx, {
+      date: '2026-10-16',
+      customerId: env.customer.id,
+      vehicleNumber: '',
+      challanNumber: '',
+      driverName: '',
+      remarks: '',
+      lines: [{ sizeId: env.sizes['3L'], quantity: 1, condition: 'filled' }],
+    })
+    current = new Date('2026-10-20T09:00:00.000Z')
+    expect(ensureOverdueNotifications(env.ctx)).toHaveLength(1)
   })
 })
 

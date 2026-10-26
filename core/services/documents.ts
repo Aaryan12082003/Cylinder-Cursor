@@ -1,11 +1,12 @@
-import { and, desc, eq, sql } from 'drizzle-orm'
+import { and, desc, eq, inArray, sql } from 'drizzle-orm'
 import type { DispatchInput, ReturnInput } from '@shared/schemas'
 import type { DispatchRow, Page, ReturnRow } from '@shared/types'
 import type { AppContext, Db } from '../db/database'
 import { inTx } from '../db/database'
-import { cylinderSizes, customers, dispatchItems, dispatches, returnItems, returns } from '../db/schema'
+import { customerLedgerEntries, cylinderMovements, cylinders, cylinderSizes, customers, dispatchItemSerials, dispatchItems, dispatches, inventoryBalances, inventoryMovements, returnItemSerials, returnItems, returns } from '../db/schema'
 import { BusinessError } from './errors'
 import { postReconciliation } from './inventory'
+import { ensureOverdueNotifications } from './notifications'
 import { clean, likePattern, nullIfEmpty } from './text'
 import {
   actorName,
@@ -36,6 +37,56 @@ type DocumentQuery = {
   sizeId?: number
 }
 
+function serialsForDispatch(db: Db, serialNumbers: string[], sizeId: number, customerId: number) {
+  if (!serialNumbers.length) return []
+  const normalized = serialNumbers.map((value) => value.trim().toUpperCase())
+  if (new Set(normalized).size !== normalized.length) throw new BusinessError('Serial numbers must be unique within a dispatch line.')
+  const found = db.select().from(cylinders).where(inArray(cylinders.serialNumber, normalized)).all()
+  if (found.length !== normalized.length) throw new BusinessError('One or more serial numbers are not registered.')
+  for (const cylinder of found) {
+    if (cylinder.sizeId !== sizeId) throw new BusinessError(`Serial ${cylinder.serialNumber} belongs to a different cylinder size.`)
+    if (cylinder.status !== 'available' || cylinder.customerId !== null) throw new BusinessError(`Serial ${cylinder.serialNumber} is not available for dispatch.`)
+  }
+  return found
+}
+
+function serialsForReturn(db: Db, serialNumbers: string[], sizeId: number, customerId: number) {
+  if (!serialNumbers.length) return []
+  const normalized = serialNumbers.map((value) => value.trim().toUpperCase())
+  if (new Set(normalized).size !== normalized.length) throw new BusinessError('Serial numbers must be unique within a return line.')
+  const found = db.select().from(cylinders).where(inArray(cylinders.serialNumber, normalized)).all()
+  if (found.length !== normalized.length) throw new BusinessError('One or more serial numbers are not registered.')
+  for (const cylinder of found) {
+    if (cylinder.sizeId !== sizeId) throw new BusinessError(`Serial ${cylinder.serialNumber} belongs to a different cylinder size.`)
+    if (cylinder.status !== 'with_customer' || cylinder.customerId !== customerId) throw new BusinessError(`Serial ${cylinder.serialNumber} is not currently held by this customer.`)
+  }
+  return found
+}
+
+function hasLaterCustomerMovement(db: Db, customerId: number, sizeId: number, documentDate: string, documentNumber: string) {
+  return db
+    .select({ transactionId: customerLedgerEntries.transactionId, entryDate: customerLedgerEntries.entryDate })
+    .from(customerLedgerEntries)
+    .where(and(eq(customerLedgerEntries.customerId, customerId), eq(customerLedgerEntries.sizeId, sizeId)))
+    .all()
+    .some((entry) => entry.transactionId !== documentNumber && entry.entryDate >= documentDate)
+}
+
+function normalizeDispatchAvailability(db: Db, sizeId: number, quantity: number, condition: 'filled' | 'empty'): Deltas {
+  const balance = db.select().from(inventoryBalances).where(eq(inventoryBalances.sizeId, sizeId)).get()
+  const available = (balance?.filledAvailable ?? 0) + (balance?.emptyAvailable ?? 0)
+  if (!balance || available < quantity) throw new BusinessError(`Not enough available cylinders. Available ${available}, requested ${quantity}.`)
+  const preferred = condition === 'filled' ? balance.filledAvailable : balance.emptyAvailable
+  const preferredState = condition === 'filled' ? 'filled' : 'empty'
+  const fallbackState = condition === 'filled' ? 'empty' : 'filled'
+  const preferredQuantity = Math.min(quantity, preferred)
+  const fallbackQuantity = quantity - preferredQuantity
+  return {
+    [preferredState]: -preferredQuantity,
+    [fallbackState]: -fallbackQuantity,
+  } as Deltas
+}
+
 function loadDispatch(db: Db, id: number): DispatchRow {
   const row = db
     .select({ dispatch: dispatches, partyName: customers.partyName })
@@ -51,6 +102,10 @@ function loadDispatch(db: Db, id: number): DispatchRow {
     .where(eq(dispatchItems.dispatchId, id))
     .all()
     .sort((a, b) => a.sortOrder - b.sortOrder || a.item.condition.localeCompare(b.item.condition))
+  const serialRows = db.select({ itemId: dispatchItemSerials.dispatchItemId, serialNumber: cylinders.serialNumber })
+    .from(dispatchItemSerials).innerJoin(cylinders, eq(cylinders.id, dispatchItemSerials.cylinderId)).all()
+  const serialMap = new Map<number, string[]>()
+  for (const row of serialRows) serialMap.set(row.itemId, [...(serialMap.get(row.itemId) ?? []), row.serialNumber])
   return {
     id: row.dispatch.id,
     number: row.dispatch.number,
@@ -72,6 +127,7 @@ function loadDispatch(db: Db, id: number): DispatchRow {
       sizeCode: item.sizeCode,
       quantity: item.item.quantity,
       condition: item.item.condition,
+      serialNumbers: serialMap.get(item.item.id) ?? [],
     })),
   }
 }
@@ -91,6 +147,10 @@ function loadReturn(db: Db, id: number): ReturnRow {
     .where(eq(returnItems.returnId, id))
     .all()
     .sort((a, b) => a.sortOrder - b.sortOrder || a.item.condition.localeCompare(b.item.condition))
+  const serialRows = db.select({ itemId: returnItemSerials.returnItemId, serialNumber: cylinders.serialNumber })
+    .from(returnItemSerials).innerJoin(cylinders, eq(cylinders.id, returnItemSerials.cylinderId)).all()
+  const serialMap = new Map<number, string[]>()
+  for (const row of serialRows) serialMap.set(row.itemId, [...(serialMap.get(row.itemId) ?? []), row.serialNumber])
   return {
     id: row.entry.id,
     number: row.entry.number,
@@ -110,6 +170,7 @@ function loadReturn(db: Db, id: number): ReturnRow {
       sizeCode: item.sizeCode,
       quantity: item.item.quantity,
       condition: item.item.condition,
+      serialNumbers: serialMap.get(item.item.id) ?? [],
     })),
   }
 }
@@ -149,13 +210,21 @@ export function createDispatch(ctx: AppContext, input: DispatchInput): DispatchR
     if (!created) throw new BusinessError('Dispatch could not be saved.')
     for (const line of input.lines) {
       const size = requireSize(db, line.sizeId)
-      db.insert(dispatchItems)
+      const serialNumbers = line.serialNumbers ?? []
+      if (serialNumbers.length && serialNumbers.length !== line.quantity) throw new BusinessError(`Provide one serial number for each ${size.name} cylinder.`)
+      const serials = serialsForDispatch(db, serialNumbers, line.sizeId, customer.id)
+      const item = db.insert(dispatchItems)
         .values({ dispatchId: created.id, sizeId: line.sizeId, quantity: line.quantity, condition: line.condition })
-        .run()
-      const deltas: Deltas =
-        line.condition === 'filled'
-          ? { filled: -line.quantity, with_customer: line.quantity }
-          : { empty: -line.quantity, with_customer: line.quantity }
+        .returning()
+        .all()[0]
+      if (!item) throw new BusinessError('Dispatch line could not be saved.')
+      for (const cylinder of serials) {
+        db.insert(dispatchItemSerials).values({ dispatchItemId: item.id, cylinderId: cylinder.id }).run()
+        db.update(cylinders).set({ status: 'with_customer', customerId: customer.id, updatedAt: createdAt }).where(eq(cylinders.id, cylinder.id)).run()
+        db.insert(cylinderMovements).values({ cylinderId: cylinder.id, movementDate: input.date, movementType: 'dispatch', fromStatus: cylinder.status, toStatus: 'with_customer', customerId: customer.id, referenceNumber: number, createdAt }).run()
+      }
+      const availabilityDeltas = normalizeDispatchAvailability(db, line.sizeId, line.quantity, line.condition)
+      const deltas: Deltas = { ...availabilityDeltas, with_customer: line.quantity }
       applyInventory(db, {
         sizeId: line.sizeId,
         deltas,
@@ -246,9 +315,25 @@ export function createReturn(ctx: AppContext, input: ReturnInput): ReturnRow {
       .all()[0]
     if (!created) throw new BusinessError('Return could not be saved.')
     for (const line of input.lines) {
-      db.insert(returnItems)
+      const serialNumbers = line.serialNumbers ?? []
+      if (serialNumbers.length && serialNumbers.length !== line.quantity) {
+        const size = requireSize(db, line.sizeId)
+        throw new BusinessError(`Provide one serial number for each ${size.name} cylinder.`)
+      }
+      const serials = serialsForReturn(db, serialNumbers, line.sizeId, customer.id)
+      const item = db.insert(returnItems)
         .values({ returnId: created.id, sizeId: line.sizeId, quantity: line.quantity, condition: line.condition })
-        .run()
+        .returning()
+        .all()[0]
+      if (!item) throw new BusinessError('Return line could not be saved.')
+      for (const cylinder of serials) {
+        db.insert(returnItemSerials).values({ returnItemId: item.id, cylinderId: cylinder.id }).run()
+        // Filled and empty are inventory conditions, not registry lifecycle states.
+        // Once returned, either condition is available for a future dispatch.
+        const nextStatus = line.condition === 'filled' || line.condition === 'empty' ? 'available' : line.condition
+        db.update(cylinders).set({ status: nextStatus, customerId: null, updatedAt: createdAt }).where(eq(cylinders.id, cylinder.id)).run()
+        db.insert(cylinderMovements).values({ cylinderId: cylinder.id, movementDate: input.date, movementType: 'return', fromStatus: cylinder.status, toStatus: nextStatus, customerId: customer.id, referenceNumber: number, createdAt }).run()
+      }
       const deltas: Deltas = { with_customer: -line.quantity, [line.condition]: line.quantity }
       applyInventory(db, {
         sizeId: line.sizeId,
@@ -285,7 +370,9 @@ export function createReturn(ctx: AppContext, input: ReturnInput): ReturnRow {
     assertConsistent(db)
     return created.id
   })
-  return getReturn(ctx, id)
+  const result = getReturn(ctx, id)
+  ensureOverdueNotifications(ctx)
+  return result
 }
 
 export function reverseDispatch(ctx: AppContext, id: number, reason: string) {
@@ -294,28 +381,53 @@ export function reverseDispatch(ctx: AppContext, id: number, reason: string) {
     if (document.reversedAt) throw new BusinessError('This dispatch has already been reversed.')
     const { today, createdAt } = stamp(ctx.now())
     for (const line of document.lines) {
+      if (!(line.serialNumbers ?? []).length && hasLaterCustomerMovement(db, document.customerId, line.sizeId, document.date, document.number)) {
+        throw new BusinessError('This dispatch cannot be undone safely because a later entry exists for the same customer and cylinder size. Undo the later entry first.')
+      }
       const outstanding = getOutstanding(db, document.customerId, line.sizeId)
       if (outstanding < line.quantity) {
         throw new BusinessError(
           'This dispatch cannot be reversed because some cylinders have already been returned. Reverse those returns first, or post a reconciliation.',
         )
       }
+      for (const serialNumber of line.serialNumbers ?? []) {
+        const cylinder = db.select().from(cylinders).where(eq(cylinders.serialNumber, serialNumber)).get()
+        if (!cylinder || cylinder.status !== 'with_customer' || cylinder.customerId !== document.customerId) {
+          throw new BusinessError(`Serial ${serialNumber} has moved since this dispatch and cannot be reversed safely.`)
+        }
+      }
     }
+    const reversedSizes = new Set<number>()
     for (const line of document.lines) {
-      const deltas: Deltas =
-        line.condition === 'filled'
-          ? { filled: line.quantity, with_customer: -line.quantity }
-          : { empty: line.quantity, with_customer: -line.quantity }
-      applyInventory(db, {
-        sizeId: line.sizeId,
-        deltas,
-        date: today,
-        movementType: 'dispatch_reversal',
-        customerId: document.customerId,
-        referenceNumber: document.number,
-        remarks: reason,
-        createdAt,
-      })
+      if (!reversedSizes.has(line.sizeId)) {
+        const recorded = db.select().from(inventoryMovements)
+          .where(and(
+            eq(inventoryMovements.sizeId, line.sizeId),
+            eq(inventoryMovements.referenceNumber, document.number),
+            eq(inventoryMovements.movementType, 'dispatch'),
+          ))
+          .all()
+        const deltas: Deltas = recorded.length
+          ? {
+              filled: -recorded.reduce((sum, row) => sum + row.filledDelta, 0),
+              empty: -recorded.reduce((sum, row) => sum + row.emptyDelta, 0),
+              with_customer: -recorded.reduce((sum, row) => sum + row.withCustomerDelta, 0),
+            }
+          : line.condition === 'filled'
+            ? { filled: line.quantity, with_customer: -line.quantity }
+            : { empty: line.quantity, with_customer: -line.quantity }
+        reversedSizes.add(line.sizeId)
+        applyInventory(db, {
+          sizeId: line.sizeId,
+          deltas,
+          date: today,
+          movementType: 'dispatch_reversal',
+          customerId: document.customerId,
+          referenceNumber: document.number,
+          remarks: reason,
+          createdAt,
+        })
+      }
       postCustomerEntry(db, {
         customerId: document.customerId,
         sizeId: line.sizeId,
@@ -327,6 +439,12 @@ export function reverseDispatch(ctx: AppContext, id: number, reason: string) {
         remarks: reason,
         createdAt,
       })
+      for (const serialNumber of line.serialNumbers ?? []) {
+        const cylinder = db.select().from(cylinders).where(eq(cylinders.serialNumber, serialNumber)).get()
+        if (!cylinder) continue
+        db.update(cylinders).set({ status: 'available', customerId: null, updatedAt: createdAt }).where(eq(cylinders.id, cylinder.id)).run()
+        db.insert(cylinderMovements).values({ cylinderId: cylinder.id, movementDate: today, movementType: 'dispatch_reversal', fromStatus: cylinder.status, toStatus: 'available', customerId: document.customerId, referenceNumber: document.number, createdAt }).run()
+      }
     }
     db.update(dispatches)
       .set({ reversedAt: createdAt, reversalReason: reason })
@@ -351,6 +469,16 @@ export function reverseReturn(ctx: AppContext, id: number, reason: string) {
     if (document.reversedAt) throw new BusinessError('This return has already been reversed.')
     const { today, createdAt } = stamp(ctx.now())
     for (const line of document.lines) {
+      if (!(line.serialNumbers ?? []).length && hasLaterCustomerMovement(db, document.customerId, line.sizeId, document.date, document.number)) {
+        throw new BusinessError('This return cannot be undone safely because a later entry exists for the same customer and cylinder size. Undo the later entry first.')
+      }
+      const expectedStatus = line.condition === 'filled' || line.condition === 'empty' ? 'available' : line.condition
+      for (const serialNumber of line.serialNumbers ?? []) {
+        const cylinder = db.select().from(cylinders).where(eq(cylinders.serialNumber, serialNumber)).get()
+        if (!cylinder || cylinder.status !== expectedStatus || cylinder.customerId !== null) {
+          throw new BusinessError(`Serial ${serialNumber} has moved since this return and cannot be reversed safely.`)
+        }
+      }
       const deltas: Deltas = {
         with_customer: line.quantity,
         [line.condition as StateKey]: -line.quantity,
@@ -376,6 +504,12 @@ export function reverseReturn(ctx: AppContext, id: number, reason: string) {
         remarks: reason,
         createdAt,
       })
+      for (const serialNumber of line.serialNumbers ?? []) {
+        const cylinder = db.select().from(cylinders).where(eq(cylinders.serialNumber, serialNumber)).get()
+        if (!cylinder) continue
+        db.update(cylinders).set({ status: 'with_customer', customerId: document.customerId, updatedAt: createdAt }).where(eq(cylinders.id, cylinder.id)).run()
+        db.insert(cylinderMovements).values({ cylinderId: cylinder.id, movementDate: today, movementType: 'return_reversal', fromStatus: cylinder.status, toStatus: 'with_customer', customerId: document.customerId, referenceNumber: document.number, createdAt }).run()
+      }
     }
     db.update(returns).set({ reversedAt: createdAt, reversalReason: reason }).where(eq(returns.id, id)).run()
     writeAudit(db, {

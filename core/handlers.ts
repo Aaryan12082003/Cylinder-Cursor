@@ -8,6 +8,7 @@ import {
   customerCreateSchema,
   customerListSchema,
   customerUpdateSchema,
+  deleteAllDataSchema,
   dispatchSchema,
   documentListSchema,
   idSchema,
@@ -23,6 +24,8 @@ import {
   returnSchema,
   reverseSchema,
   searchSchema,
+  serialListSchema,
+  serialRegistrationSchema,
   settingsUpdateSchema,
   sizeCreateSchema,
   sizeUpdateSchema,
@@ -38,12 +41,14 @@ import { createDispatch, createReturn, getDispatch, getReturn, listDispatches, l
 import { challanToPdf, reportToExcel, reportToPdf } from './services/exports'
 import { adjustInventory, inventoryOverview, listMovements, reconcileCustomer, setOpeningBalances } from './services/inventory'
 import { listLedger, listOutstanding } from './services/ledger'
+import { listCylinders, registerCylinders } from './services/cylinders'
 import { ensureMonthEnd, getMonthEnd, listMonthEnds } from './services/monthEnd'
 import { listNotifications, markAllNotificationsRead, markNotificationRead, unreadCount } from './services/notifications'
 import { REPORT_CATALOG, runReport } from './services/reports'
 import { globalSearch } from './services/search'
 import { addCylinderSize, deleteCylinderSize, getSettings, saveLogo, updateCompany, updateCylinderSize, updateSettings, defaultBackupDir } from './services/settings'
 import { getDashboard } from './services/dashboard'
+import { purgeOperationalData } from './services/dataPurge'
 import { BusinessError } from './services/errors'
 
 const outstandingSchema = pageSchema.extend({
@@ -65,6 +70,8 @@ export function buildHandlers(ctx: AppContext, host: Host): Record<Channel, (pay
     'inventory:setOpening': (payload) => setOpeningBalances(ctx, parse(openingStockSchema, payload)),
     'inventory:adjust': (payload) => adjustInventory(ctx, parse(adjustmentSchema, payload)),
     'inventory:movements': (payload) => listMovements(ctx, parse(movementListSchema, payload)),
+    'cylinders:list': (payload) => listCylinders(ctx, parse(serialListSchema, payload)),
+    'cylinders:register': (payload) => registerCylinders(ctx, parse(serialRegistrationSchema, payload)),
     'customers:list': (payload) => listCustomers(ctx, parse(customerListSchema, payload)),
     'customers:get': (payload) => getCustomer(ctx, parse(idSchema, payload).id),
     'customers:create': (payload) => createCustomer(ctx, parse(customerCreateSchema, payload)),
@@ -149,6 +156,11 @@ export function buildHandlers(ctx: AppContext, host: Host): Record<Channel, (pay
     'settings:deleteSize': (payload) => {
       deleteCylinderSize(ctx, parse(idSchema, payload).id)
       return getSettings(ctx)
+    },
+    'settings:deleteAllData': (payload) => {
+      const input = parse(deleteAllDataSchema, payload)
+      if (input.confirmation !== 'DELETE ALL DATA') throw new BusinessError('Type DELETE ALL DATA to confirm.')
+      return purgeOperationalData(ctx)
     },
     'search:global': (payload) => globalSearch(ctx, parse(searchSchema, payload).query),
     'backup:list': () => listBackups(ctx),

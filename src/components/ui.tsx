@@ -285,6 +285,7 @@ export function ConfirmDialog({
   body,
   confirmLabel,
   danger,
+  disabled,
   onConfirm,
   onOpenChange,
 }: {
@@ -293,6 +294,7 @@ export function ConfirmDialog({
   body: string
   confirmLabel: string
   danger?: boolean
+  disabled?: boolean
   onConfirm: () => void
   onOpenChange: (open: boolean) => void
 }) {
@@ -303,7 +305,7 @@ export function ConfirmDialog({
           <Button variant="secondary" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
-          <Button variant={danger ? 'danger' : 'primary'} onClick={onConfirm}>
+          <Button variant={danger ? 'danger' : 'primary'} onClick={onConfirm} disabled={disabled}>
             {confirmLabel}
           </Button>
         </div>

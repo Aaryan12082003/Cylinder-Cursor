@@ -1,10 +1,11 @@
 import { desc, eq, isNull, sql } from 'drizzle-orm'
 import type { AppNotification, Page } from '@shared/types'
 import type { AppContext } from '../db/database'
-import { inTx } from '../db/database'
+import { inTx, setting } from '../db/database'
 import { notifications } from '../db/schema'
 import { BusinessError } from './errors'
-import { nowIso } from '@shared/dates'
+import { formatCount, nowIso } from '@shared/dates'
+import { holdingPositions } from './ledger'
 
 function mapNotification(row: typeof notifications.$inferSelect): AppNotification {
   return {
@@ -51,5 +52,63 @@ export function markAllNotificationsRead(ctx: AppContext) {
   return inTx(ctx, (db) => {
     db.update(notifications).set({ readAt: nowIso(ctx.now()) }).where(isNull(notifications.readAt)).run()
     return { unread: 0 }
+  })
+}
+
+export type OverdueNotification = { title: string; body: string; customerId: number }
+
+/**
+ * Creates one in-app notification when a customer's current holding crosses
+ * the configured overdue threshold. The dispatch date is part of the dedupe
+ * key, so a later dispatch creates a fresh alert after a previous holding is
+ * returned.
+ */
+export function ensureOverdueNotifications(ctx: AppContext): OverdueNotification[] {
+  return inTx(ctx, (db) => {
+    const threshold = Math.max(1, Number(setting(db, 'overdue_threshold_days', '30')) || 30)
+    const now = nowIso(ctx.now())
+    const overdue = holdingPositions(ctx).filter((row) => row.overdue)
+    const activeKeys = new Set(overdue.map((row) => `overdue:${row.customerId}:${row.lastDispatchDate ?? 'opening'}:${row.alertThresholdDays}`))
+    const existing = db.select().from(notifications).where(eq(notifications.kind, 'overdue-holding')).all()
+
+    // Returning all cylinders clears the unread alert for that holding episode.
+    for (const row of existing) {
+      if (row.readAt || !row.dedupeKey || activeKeys.has(row.dedupeKey)) continue
+      db.update(notifications).set({ readAt: now }).where(eq(notifications.id, row.id)).run()
+    }
+
+    const created: OverdueNotification[] = []
+    for (const row of overdue) {
+      const rowThreshold = row.alertThresholdDays
+      const dedupeKey = `overdue:${row.customerId}:${row.lastDispatchDate ?? 'opening'}:${rowThreshold}`
+      if (existing.some((note) => note.dedupeKey === dedupeKey)) continue
+      const breakdown = row.balances
+        .filter((balance) => balance.outstanding > 0)
+        .map((balance) => `${balance.name}: ${formatCount(balance.outstanding)}`)
+        .join(', ')
+      const balanceSummary = Object.fromEntries(row.balances.map((balance) => [balance.code, balance.outstanding]))
+      const title = `${row.partyName} still has cylinders`
+      const body = `${formatCount(row.total)} cylinder${row.total === 1 ? '' : 's'} held for ${row.daysSinceMovement ?? rowThreshold} days (${breakdown}). Alert threshold: ${rowThreshold} days.`
+      db.insert(notifications)
+        .values({
+          kind: 'overdue-holding',
+          title,
+          body,
+          payloadJson: JSON.stringify({
+            customerId: row.customerId,
+            code: row.code,
+            partyName: row.partyName,
+            total: row.total,
+            daysHeld: row.daysSinceMovement,
+            thresholdDays: rowThreshold,
+            balances: balanceSummary,
+          }),
+          createdAt: now,
+          dedupeKey,
+        })
+        .run()
+      created.push({ title, body, customerId: row.customerId })
+    }
+    return created
   })
 }

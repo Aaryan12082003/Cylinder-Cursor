@@ -4,6 +4,7 @@ import type {
   AuditRow,
   BackupRecord,
   CustomerRow,
+  CylinderRow,
   DashboardData,
   DispatchRow,
   LedgerRow,
@@ -35,6 +36,8 @@ async function call<T>(channel: string, payload?: unknown): Promise<T> {
 export const api = {
   dashboard: () => call<DashboardData>('dashboard:get'),
   inventory: () => call<{ sizes: SizeBalance[] }>('inventory:overview'),
+  cylinders: (payload: unknown) => call<Page<CylinderRow>>('cylinders:list', payload),
+  registerCylinders: (payload: unknown) => call<{ registered: number }>('cylinders:register', payload),
   setOpening: (payload: unknown) => call<{ sizes: SizeBalance[] }>('inventory:setOpening', payload),
   adjust: (payload: unknown) => call<{ number: string }>('inventory:adjust', payload),
   movements: (payload: unknown) => call<Page<MovementRow>>('inventory:movements', payload),
@@ -86,6 +89,7 @@ export const api = {
   audit: (payload: unknown) => call<Page<AuditRow>>('audit:list', payload),
   loadDemo: () => call<{ loaded: boolean }>('demo:load'),
   purgeDemo: () => call<{ purged: boolean }>('demo:purge'),
+  deleteAllData: (confirmation: string) => call<{ deleted: true; backupCleanupIncomplete: boolean }>('settings:deleteAllData', { confirmation }),
   consistency: () => call<{ ok: boolean; problems: string[] }>('consistency:check'),
 }
 
