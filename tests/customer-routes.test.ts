@@ -43,10 +43,10 @@ describe('customer route assignment', () => {
 
     const reopened = openDatabase(path)
     open.push({ close: () => closeDatabase(reopened) })
-    expect(reopened.sqlite.prepare('PRAGMA table_info(customers)').all().some((column: { name: string }) => column.name === 'route_id')).toBe(true)
+    expect((reopened.sqlite.prepare('PRAGMA table_info(customers)').all() as { name: string }[]).some((column) => column.name === 'route_id')).toBe(true)
     expect(reopened.sqlite.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_customers_route'").get()).toBeTruthy()
-    expect(reopened.sqlite.prepare('PRAGMA table_info(dispatches)').all().some((column: { name: string }) => column.name === 'route_name')).toBe(true)
-    expect(reopened.sqlite.prepare('PRAGMA table_info(returns)').all().some((column: { name: string }) => column.name === 'route_name')).toBe(true)
+    expect((reopened.sqlite.prepare('PRAGMA table_info(dispatches)').all() as { name: string }[]).some((column) => column.name === 'route_name')).toBe(true)
+    expect((reopened.sqlite.prepare('PRAGMA table_info(returns)').all() as { name: string }[]).some((column) => column.name === 'route_name')).toBe(true)
   })
 
   it('assigns, changes, clears, and exposes route details on customer rows', () => {

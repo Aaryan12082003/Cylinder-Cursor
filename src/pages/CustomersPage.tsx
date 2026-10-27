@@ -31,6 +31,11 @@ const emptyCustomer: CustomerCreateInput = {
   openingBalances: [],
 }
 
+type CustomerRouteFields = {
+  routeId?: number | null
+  routeName?: string
+}
+
 export function CustomersPage() {
   const [params, setParams] = useSearchParams()
   const [search, setSearch] = useState('')
@@ -166,6 +171,7 @@ export function CustomersPage() {
         open={creating || Boolean(editing)}
         customer={editing}
         sizes={sizes.data?.sizes ?? []}
+        routes={sizes.data?.routes ?? []}
         onOpenChange={(open) => {
           if (!open) {
             setCreating(false)
@@ -198,20 +204,23 @@ function Status({ row }: { row: CustomerRow }) {
   return <Badge tone="success">Active</Badge>
 }
 
-function CustomerForm({ open, customer, sizes, onOpenChange }: { open: boolean; customer: CustomerRow | null; sizes: { id: number; code: string; name: string; isActive: boolean }[]; onOpenChange: (open: boolean) => void }) {
+function CustomerForm({ open, customer, sizes, routes, onOpenChange }: { open: boolean; customer: CustomerRow | null; sizes: { id: number; code: string; name: string; isActive: boolean }[]; routes: { id: number; name: string; isActive: boolean }[]; onOpenChange: (open: boolean) => void }) {
   const qc = useQueryClient()
   const form = useForm<CustomerCreateInput>({
     resolver: zodResolver(customerCreateSchema),
     defaultValues: emptyCustomer,
   })
+  const [routeId, setRouteId] = useState<number | null>(null)
   useEffect(() => {
     if (!open) return
     form.reset(customer ? { ...emptyCustomer, ...customer, openingBalances: [] } : emptyCustomer)
+    setRouteId((customer as (CustomerRow & CustomerRouteFields) | null)?.routeId ?? null)
   }, [open, customer, form])
   const [openings, setOpenings] = useState<Record<number, string>>({})
   const save = useMutation({
-    mutationFn: (values: CustomerCreateInput) => customer ? api.updateCustomer({ ...values, id: customer.id }) : api.createCustomer({
+    mutationFn: (values: CustomerCreateInput) => customer ? api.updateCustomer({ ...values, id: customer.id, routeId }) : api.createCustomer({
       ...values,
+      routeId,
       openingBalances: Object.entries(openings).filter(([, quantity]) => Number(quantity) > 0).map(([sizeId, quantity]) => ({ sizeId: Number(sizeId), quantity: Number(quantity) })),
     }),
     onSuccess: () => {
@@ -240,6 +249,12 @@ function CustomerForm({ open, customer, sizes, onOpenChange }: { open: boolean; 
             <Select {...form.register('status')}>
               <option value="active">Active</option>
               <option value="inactive">Inactive</option>
+            </Select>
+          </Field>
+          <Field label="Assigned route">
+            <Select value={routeId == null ? '' : String(routeId)} onChange={(event) => setRouteId(event.target.value ? Number(event.target.value) : null)}>
+              <option value="">No route</option>
+              {routes.filter((route) => route.isActive || route.id === routeId).map((route) => <option key={route.id} value={route.id}>{route.name}{route.isActive ? '' : ' (inactive)'}</option>)}
             </Select>
           </Field>
           <Field label="Overdue alert period">
@@ -299,6 +314,7 @@ function CustomerProfile({ id, onClose, onEdit }: { id: number | null; onClose: 
             <Info label="Email" value={row.email} />
             <Info label="GSTIN" value={row.gstNumber} />
             <Info label="City" value={[row.city, row.state, row.pinCode].filter(Boolean).join(', ')} />
+            <Info label="Route" value={(row as CustomerRow & CustomerRouteFields).routeName ?? 'No route assigned'} />
             <Info label="Overdue alert" value={row.alertThresholdDays ? `${row.alertThresholdDays} days` : 'Global default'} />
             <Info label="Created" value={formatDateOnly(row.createdAt.slice(0, 10))} />
           </div>

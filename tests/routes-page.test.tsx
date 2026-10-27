@@ -81,4 +81,17 @@ describe('RoutesPage', () => {
     await screen.findByRole('heading', { name: 'South route' })
     expect(screen.getByText('No current cylinders are associated with this route.')).toBeTruthy()
   })
+
+  it('shows assigned customers even when the route has no movement history', async () => {
+    vi.mocked(api.routeDetail).mockResolvedValue({
+      ...routeDetail,
+      customers: [{ customerId: 42, customerCode: 'CUST-42', customerName: 'No-history customer', mobile: '9876543210', city: 'Jaipur', status: 'active' }],
+    })
+
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(<QueryClientProvider client={queryClient}><RoutesPage /></QueryClientProvider>)
+
+    expect(await screen.findByText('No-history customer')).toBeTruthy()
+    expect(screen.queryByText('No customers are assigned to this route.')).toBeNull()
+  })
 })

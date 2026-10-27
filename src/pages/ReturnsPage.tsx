@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { formatCount, formatDateOnly, todayIso } from '@shared/dates'
 import { Pencil, Plus, Trash2, Undo2 } from 'lucide-react'
-import { useMemo, useState, type Dispatch, type SetStateAction } from 'react'
+import { useEffect, useMemo, useState, type Dispatch, type SetStateAction } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { Badge, Button, Card, ConfirmDialog, Dialog, DialogContent, EmptyState, Field, Input, Page, Pagination, Select, Textarea } from '@/components/ui'
@@ -9,6 +9,7 @@ import { api } from '@/lib/api'
 import type { ReturnRow } from '@shared/types'
 
 type Line = { sizeId: string; quantity: string; condition: 'filled' | 'empty' | 'damaged' | 'lost' | 'maintenance'; serialNumbers: string }
+type CustomerRouteFields = { routeId?: number | null; routeName?: string }
 
 export function ReturnsPage() {
   const [params] = useSearchParams()
@@ -21,10 +22,12 @@ export function ReturnsPage() {
   const [lines, setLines] = useState<Line[]>([{ sizeId: '', quantity: '', condition: 'empty', serialNumbers: '' }])
   const [confirm, setConfirm] = useState(false)
   const [editing, setEditing] = useState<number | null>(null)
+  const [routeOverride, setRouteOverride] = useState(false)
   const [reverse, setReverse] = useState<number | null>(null)
   const [reason, setReason] = useState('')
   const sizes = settings.data?.sizes.filter((size) => size.isActive) ?? []
   const total = lines.reduce((sum, line) => sum + (Number(line.quantity) || 0), 0)
+  const selectedCustomer = customers.data?.rows.find((customer) => String(customer.id) === form.customerId)
   const payload = useMemo(() => ({
     ...form,
     customerId: Number(form.customerId),
@@ -36,6 +39,7 @@ export function ReturnsPage() {
     onSuccess: (entry) => {
       toast.success(`${entry.number} received`)
       setConfirm(false)
+      setRouteOverride(false)
       qc.invalidateQueries()
     },
     onError: (error: Error) => toast.error(error.message),
@@ -46,7 +50,7 @@ export function ReturnsPage() {
       toast.success(`${entry.number} updated`)
       setConfirm(false)
       setEditing(null)
-      resetReturnForm(setForm, setLines)
+      resetReturnForm(setForm, setLines, setRouteOverride)
       qc.invalidateQueries()
     },
     onError: (error: Error) => toast.error(error.message),
@@ -60,21 +64,37 @@ export function ReturnsPage() {
     },
     onError: (error: Error) => toast.error(error.message),
   })
+  useEffect(() => {
+    if (editing !== null || routeOverride || !form.customerId) return
+    const customer = selectedCustomer as (CustomerRouteFields & { id: number }) | undefined
+    const customerRouteId = customer?.routeId ?? null
+    const nextRouteId = customerRouteId == null ? '' : String(customerRouteId)
+    if (form.routeId !== nextRouteId) setForm((current) => ({ ...current, routeId: nextRouteId }))
+  }, [editing, form.customerId, form.routeId, routeOverride, selectedCustomer])
   return (
     <Page title="Receive cylinders" subtitle="Partial and mixed returns are supported. A customer cannot return more than their outstanding balance unless you authorize a reconciliation.">
       <div className="grid gap-4 xl:grid-cols-[420px_1fr]">
         <Card className="p-5">
-          <div className="flex items-center justify-between"><h2 className="text-base font-semibold">{editing ? 'Edit return' : 'New return'}</h2>{editing ? <Button size="sm" variant="ghost" onClick={() => { setEditing(null); resetReturnForm(setForm, setLines) }}>Cancel</Button> : null}</div>
+          <div className="flex items-center justify-between"><h2 className="text-base font-semibold">{editing ? 'Edit return' : 'New return'}</h2>{editing ? <Button size="sm" variant="ghost" onClick={() => { setEditing(null); resetReturnForm(setForm, setLines, setRouteOverride) }}>Cancel</Button> : null}</div>
           <div className="mt-4 grid gap-3">
             <Field label="Date"><Input type="date" value={form.date} onChange={(event) => setForm({ ...form, date: event.target.value })} /></Field>
             <Field label="Customer">
-              <Select value={form.customerId} onChange={(event) => setForm({ ...form, customerId: event.target.value })}>
+              <Select value={form.customerId} onChange={(event) => {
+                const customerId = event.target.value
+                if (routeOverride) {
+                  setForm({ ...form, customerId })
+                  return
+                }
+                const customer = customers.data?.rows.find((item) => String(item.id) === customerId) as (CustomerRouteFields & { id: number }) | undefined
+                const customerRouteId = customer?.routeId ?? null
+                setForm({ ...form, customerId, routeId: customerRouteId == null ? '' : String(customerRouteId) })
+              }}>
                 <option value="">Choose customer</option>
                 {customers.data?.rows.map((customer) => <option key={customer.id} value={customer.id}>{customer.partyName}</option>)}
               </Select>
             </Field>
             <Field label="Route (optional)">
-              <Select value={form.routeId} onChange={(event) => setForm({ ...form, routeId: event.target.value })}>
+              <Select value={form.routeId} onChange={(event) => { setRouteOverride(true); setForm({ ...form, routeId: event.target.value }) }}>
                 <option value="">Choose route</option>
                 {settings.data?.routes.filter((route) => route.isActive || String(route.id) === form.routeId).map((route) => <option key={route.id} value={route.id}>{route.name}{route.isActive ? '' : ' (inactive)'}</option>)}
               </Select>
@@ -116,7 +136,7 @@ export function ReturnsPage() {
                   <td className="px-4 py-3">{row.partyName}{row.routeName ? <div className="text-xs text-muted">{row.routeName}</div> : null}</td>
                   <td className="px-4 py-3">{row.totalQuantity}</td>
                   <td className="px-4 py-3">{row.reversedAt ? <Badge tone="warning">Reversed</Badge> : <Badge tone="success">Posted</Badge>}</td>
-                  <td className="px-4 py-3 text-right">{row.reversedAt ? null : <><Button size="sm" variant="ghost" onClick={() => beginEditReturn(row, setEditing, setForm, setLines)}><Pencil className="mr-1 h-3.5 w-3.5" />Edit</Button><Button size="sm" variant="ghost" onClick={() => setReverse(row.id)}>Undo mistake</Button></>}</td>
+                  <td className="px-4 py-3 text-right">{row.reversedAt ? null : <><Button size="sm" variant="ghost" onClick={() => beginEditReturn(row, setEditing, setForm, setLines, setRouteOverride)}><Pencil className="mr-1 h-3.5 w-3.5" />Edit</Button><Button size="sm" variant="ghost" onClick={() => setReverse(row.id)}>Undo mistake</Button></>}</td>
                 </tr>
               ))}
             </tbody>
@@ -139,9 +159,11 @@ export function ReturnsPage() {
 function resetReturnForm(
   setForm: Dispatch<SetStateAction<{ date: string; customerId: string; routeId: string; challanReference: string; remarks: string; allowReconciliation: boolean; reconciliationReason: string }>>,
   setLines: Dispatch<SetStateAction<Line[]>>,
+  setRouteOverride: Dispatch<SetStateAction<boolean>>,
 ) {
   setForm((current) => ({ ...current, date: todayIso(), routeId: '', challanReference: '', remarks: '', allowReconciliation: false, reconciliationReason: '' }))
   setLines([{ sizeId: '', quantity: '', condition: 'empty', serialNumbers: '' }])
+  setRouteOverride(false)
 }
 
 function beginEditReturn(
@@ -149,8 +171,10 @@ function beginEditReturn(
   setEditing: Dispatch<SetStateAction<number | null>>,
   setForm: Dispatch<SetStateAction<{ date: string; customerId: string; routeId: string; challanReference: string; remarks: string; allowReconciliation: boolean; reconciliationReason: string }>>,
   setLines: Dispatch<SetStateAction<Line[]>>,
+  setRouteOverride: Dispatch<SetStateAction<boolean>>,
 ) {
   setEditing(row.id)
   setForm({ date: row.date, customerId: String(row.customerId), routeId: row.routeId ? String(row.routeId) : '', challanReference: row.challanReference, remarks: row.remarks, allowReconciliation: false, reconciliationReason: '' })
+  setRouteOverride(true)
   setLines(row.lines.map((line) => ({ sizeId: String(line.sizeId), quantity: String(line.quantity), condition: line.condition as Line['condition'], serialNumbers: (line.serialNumbers ?? []).join('\n') })))
 }
