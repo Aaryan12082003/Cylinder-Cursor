@@ -248,6 +248,28 @@ function ensureIncrementalSchema(sqlite: Database.Database) {
     SET route_name = (SELECT name FROM routes WHERE routes.id = returns.route_id)
     WHERE route_name IS NULL AND route_id IS NOT NULL;
   `)
+  // Older records may have a city that exactly identifies an active route but
+  // no route assignment. Backfill only an unassigned customer and only when
+  // exactly one active route matches (case-insensitively after trimming), so a
+  // legacy database is never silently re-routed on ambiguous data.
+  sqlite.exec(`
+    UPDATE customers
+    SET route_id = (
+      SELECT r.id
+      FROM routes r
+      WHERE r.is_active = 1
+        AND lower(trim(r.name)) = lower(trim(customers.city))
+    )
+    WHERE customers.route_id IS NULL
+      AND customers.city IS NOT NULL
+      AND length(trim(customers.city)) > 0
+      AND (
+        SELECT count(*)
+        FROM routes r
+        WHERE r.is_active = 1
+          AND lower(trim(r.name)) = lower(trim(customers.city))
+      ) = 1;
+  `)
   sqlite.exec('CREATE INDEX IF NOT EXISTS idx_dispatches_route ON dispatches(route_id); CREATE INDEX IF NOT EXISTS idx_returns_route ON returns(route_id)')
 }
 

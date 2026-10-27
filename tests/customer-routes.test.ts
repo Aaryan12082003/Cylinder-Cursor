@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import Database from 'better-sqlite3'
 import type { RouteDetail } from '@shared/types'
 import { createCustomer, getCustomer, listCustomers, updateCustomer } from '../core/services/customers'
-import { createDispatch, getDispatch } from '../core/services/documents'
+import { createDispatch, editDispatch, getDispatch } from '../core/services/documents'
 import { createRoute, deleteRoute, routeDetail, updateRoute } from '../core/services/routes'
 import { setOpeningBalances } from '../core/services/inventory'
 import { closeDatabase, openDatabase } from '../core/db/database'
@@ -36,6 +36,37 @@ function fields(extra: Record<string, unknown> = {}) {
 }
 
 describe('customer route assignment', () => {
+  it('matches a new customer city to one active route and preserves the assignment on ordinary edits', () => {
+    const env = tempContext()
+    open.push(env)
+    const cityRoute = createRoute(env.ctx, { name: 'Mumbai' })
+    const legacyRoute = createRoute(env.ctx, { name: 'Legacy route' })
+    const customer = createCustomer(env.ctx, fields({ city: '  mUMbai  ', routeId: legacyRoute.id }))
+
+    // A city match is authoritative for new records, even when an older
+    // caller still sends an unrelated routeId.
+    expect(customer.routeId).toBe(cityRoute.id)
+    expect(customer.routeName).toBe(cityRoute.name)
+
+    const edited = updateCustomer(env.ctx, { id: customer.id, ...fields({ city: 'Pune' }) })
+    expect(edited.routeId).toBe(cityRoute.id)
+
+    const explicitlyChanged = updateCustomer(env.ctx, { id: customer.id, ...fields({ city: 'Pune', routeId: legacyRoute.id }) })
+    expect(explicitlyChanged.routeId).toBe(legacyRoute.id)
+  })
+
+  it('backfills an unassigned legacy customer only when its city has one active route match', () => {
+    const env = tempContext()
+    const customer = createCustomer(env.ctx, fields({ city: 'Rajkot' }))
+    const route = createRoute(env.ctx, { name: 'rajkot' })
+    const path = env.ctx.path
+    env.close()
+    const reopened = openDatabase(path)
+    open.push({ close: () => closeDatabase(reopened) })
+
+    expect(getCustomer(reopened, customer.id).routeId).toBe(route.id)
+  })
+
   it('adds route columns and indexes to an existing current database', () => {
     const env = tempContext()
     setOpeningBalances(env.ctx, { rows: [{ sizeId: env.sizes['3L'], filled: 2, empty: 0, damaged: 0, maintenance: 0, notes: '' }] })
@@ -108,6 +139,34 @@ describe('customer route assignment', () => {
 })
 
 describe('route detail and document route snapshots', () => {
+  it('derives new documents from the customer and keeps the original route snapshot on edits', () => {
+    const env = tempContext(() => new Date('2026-10-27T10:00:00.000Z'))
+    open.push(env)
+    setOpeningBalances(env.ctx, { rows: [{ sizeId: env.sizes['3L'], filled: 4, empty: 0, damaged: 0, maintenance: 0, notes: '' }] })
+    const assigned = createRoute(env.ctx, { name: 'Assigned route' })
+    const unrelated = createRoute(env.ctx, { name: 'Unrelated route' })
+    const customer = createCustomer(env.ctx, fields({ city: 'No matching city', routeId: assigned.id }))
+
+    const input = {
+      date: '2026-10-27',
+      customerId: customer.id,
+      routeId: unrelated.id,
+      vehicleNumber: '',
+      challanNumber: '',
+      driverName: '',
+      remarks: '',
+      lines: [{ sizeId: env.sizes['3L'], quantity: 1, condition: 'filled' as const }],
+    }
+    const dispatch = createDispatch(env.ctx, input)
+    expect(dispatch.routeId).toBe(assigned.id)
+    expect(dispatch.routeName).toBe(assigned.name)
+
+    updateCustomer(env.ctx, { id: customer.id, ...fields({ city: 'No matching city', routeId: unrelated.id }) })
+    const replacement = editDispatch(env.ctx, dispatch.id, { id: dispatch.id, ...input, routeId: unrelated.id })
+    expect(replacement.routeId).toBe(assigned.id)
+    expect(replacement.routeName).toBe(assigned.name)
+  })
+
   it('searches assigned customers and preserves the route name on documents after rename', async () => {
     const env = tempContext(() => new Date('2026-10-27T10:00:00.000Z'))
     open.push(env)

@@ -48,6 +48,30 @@ function text(value: string | null | undefined): string {
   return value ?? ''
 }
 
+/**
+ * Route names are the canonical route key for new customer records. Keep the
+ * comparison deliberately small and deterministic: trim outer whitespace and
+ * compare case-insensitively, while retaining the route's original casing in
+ * the stored relation and display value.
+ */
+function routeKey(value: string | null | undefined) {
+  return (value ?? '').trim().toLowerCase()
+}
+
+function routeForCity(db: Db, city: string | null | undefined) {
+  const key = routeKey(city)
+  if (!key) return null
+  const matches = db
+    .select()
+    .from(routes)
+    .where(sql`${routes.isActive} = 1 AND lower(trim(${routes.name})) = ${key}`)
+    .all()
+  // A legacy database can contain case-variant route names even though the
+  // service now prevents them. Do not guess when more than one active route
+  // matches the city.
+  return matches.length === 1 ? matches[0] : null
+}
+
 export function balancesFor(db: Db, customerIds: number[]): Map<number, CustomerBalance[]> {
   const map = new Map<number, CustomerBalance[]>()
   if (!customerIds.length) return map
@@ -201,7 +225,12 @@ export function createCustomer(ctx: AppContext, input: CustomerCreateInput): Cus
   const id = inTx(ctx, (db) => {
     const { today, createdAt } = stamp(ctx.now())
     const actor = actorName(db)
-    const route = requireRoute(db, input.routeId)
+    // City is the source of truth for new assignments. Keep the explicit
+    // routeId fallback for older callers/backups whose city does not map to a
+    // route yet; a matching active city route always wins over that legacy
+    // selection.
+    const cityRoute = routeForCity(db, input.city)
+    const route = cityRoute ?? requireRoute(db, input.routeId)
     const code = nextNumber(db, 'customer', today, 'CUST')
     const created = db
       .insert(customers)

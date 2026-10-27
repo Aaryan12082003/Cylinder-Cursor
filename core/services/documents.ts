@@ -205,11 +205,34 @@ export function getReturn(ctx: AppContext, id: number) {
   return loadReturn(ctx.db, id)
 }
 
-function createDispatchInDb(ctx: AppContext, db: Db, input: DispatchInput, options: { allowedInactiveRouteId?: number | null } = {}): number {
+type HistoricalRouteSnapshot = { routeId: number | null; routeName: string | null }
+
+function resolveDocumentRoute(
+  db: Db,
+  customer: ReturnType<typeof requireCustomer>,
+  historicalSnapshot?: HistoricalRouteSnapshot,
+) {
+  if (historicalSnapshot) {
+    if (historicalSnapshot.routeId === null) {
+      return historicalSnapshot.routeName === null ? null : { id: null, name: historicalSnapshot.routeName }
+    }
+    const route = requireRoute(db, historicalSnapshot.routeId, { active: false })
+    // The name snapshot is intentionally preferred on replacement rows. Route
+    // names may have changed since the original document was posted.
+    return { id: route.id, name: historicalSnapshot.routeName ?? route.name }
+  }
+  if (customer.routeId === null || customer.routeId === undefined) return null
+  // An assigned route can later be deactivated. Existing customers still own
+  // that assignment, so preserve it on new documents rather than allowing a
+  // UI-provided route override to rewrite the record.
+  return requireRoute(db, customer.routeId, { active: false })
+}
+
+function createDispatchInDb(ctx: AppContext, db: Db, input: DispatchInput, historicalSnapshot?: HistoricalRouteSnapshot): number {
     assertNotFuture(input.date, ctx.now())
     assertUniqueLines(input.lines)
     const customer = requireCustomer(db, input.customerId, { forDispatch: true })
-    const route = requireRoute(db, input.routeId, { active: input.routeId !== options.allowedInactiveRouteId })
+    const route = resolveDocumentRoute(db, customer, historicalSnapshot)
     const { createdAt } = stamp(ctx.now())
     const actor = actorName(db)
     const number = nextNumber(db, 'dispatch', input.date, 'DSP')
@@ -291,11 +314,11 @@ export function createDispatch(ctx: AppContext, input: DispatchInput): DispatchR
   return getDispatch(ctx, id)
 }
 
-function createReturnInDb(ctx: AppContext, db: Db, input: ReturnInput, options: { allowedInactiveRouteId?: number | null } = {}): number {
+function createReturnInDb(ctx: AppContext, db: Db, input: ReturnInput, historicalSnapshot?: HistoricalRouteSnapshot): number {
     assertNotFuture(input.date, ctx.now())
     assertUniqueLines(input.lines)
     const customer = requireCustomer(db, input.customerId)
-    const route = requireRoute(db, input.routeId, { active: input.routeId !== options.allowedInactiveRouteId })
+    const route = resolveDocumentRoute(db, customer, historicalSnapshot)
     const { createdAt } = stamp(ctx.now())
     const actor = actorName(db)
     const totals = new Map<number, number>()
@@ -603,7 +626,7 @@ export function editDispatch(ctx: AppContext, id: number, input: DispatchUpdateI
     for (const line of input.lines) {
       assertEditTargetHasNoLaterMovement(db, input.customerId, line.sizeId, original)
     }
-    const replacementId = createDispatchInDb(ctx, db, input, { allowedInactiveRouteId: original.routeId })
+    const replacementId = createDispatchInDb(ctx, db, input, { routeId: original.routeId, routeName: original.routeName || null })
     const replacement = loadDispatch(db, replacementId)
     writeAudit(db, {
       occurredAt: stamp(ctx.now()).createdAt,
@@ -630,7 +653,7 @@ export function editReturn(ctx: AppContext, id: number, input: ReturnUpdateInput
     for (const line of input.lines) {
       assertEditTargetHasNoLaterMovement(db, input.customerId, line.sizeId, original)
     }
-    const replacementId = createReturnInDb(ctx, db, input, { allowedInactiveRouteId: original.routeId })
+    const replacementId = createReturnInDb(ctx, db, input, { routeId: original.routeId, routeName: original.routeName || null })
     const replacement = loadReturn(db, replacementId)
     writeAudit(db, {
       occurredAt: stamp(ctx.now()).createdAt,
