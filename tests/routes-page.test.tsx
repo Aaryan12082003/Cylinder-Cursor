@@ -94,4 +94,30 @@ describe('RoutesPage', () => {
     expect(await screen.findByText('No-history customer')).toBeTruthy()
     expect(screen.queryByText('No customers are assigned to this route.')).toBeNull()
   })
+
+  it('filters assigned customers by code and city on the existing search', async () => {
+    vi.mocked(api.routeDetail).mockResolvedValue({
+      ...routeDetail,
+      customers: [
+        { customerId: 42, customerCode: 'CUST-42', customerName: 'Jaipur Gas', mobile: '9876543210', city: 'Jaipur', status: 'active' },
+        { customerId: 43, customerCode: 'CUST-43', customerName: 'Delhi Gas', mobile: '9876543211', city: 'Delhi', status: 'active' },
+      ],
+    })
+
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(<QueryClientProvider client={queryClient}><RoutesPage /></QueryClientProvider>)
+
+    const input = await screen.findByPlaceholderText('Search customer, cylinder size, serial, or challan')
+    fireEvent.change(input, { target: { value: 'CUST-42' } })
+    await waitFor(() => {
+      expect(screen.getByText('Jaipur Gas')).toBeTruthy()
+      expect(screen.queryByText('Delhi Gas')).toBeNull()
+    })
+
+    fireEvent.change(input, { target: { value: 'Delhi' } })
+    await waitFor(() => {
+      expect(screen.getByText('Delhi Gas')).toBeTruthy()
+      expect(screen.queryByText('Jaipur Gas')).toBeNull()
+    })
+  })
 })

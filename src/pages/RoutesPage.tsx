@@ -7,8 +7,10 @@ import type { AppSettings, RouteDetail } from '@shared/types'
 
 type AssignedCustomer = {
   customerId: number
+  customerCode?: string
   customerName: string
   mobile?: string
+  city?: string
   routeName?: string
   quantity?: number
   totalQuantity?: number
@@ -41,7 +43,7 @@ export function RoutesPage() {
   const assignedCustomers = useMemo(() => {
     const rows = detailData?.assignedCustomers ?? detailData?.customers ?? detailData?.customerAssignments ?? []
     const search = detailSearch.trim().toLowerCase()
-    return rows.filter((row) => !search || `${row.customerName} ${row.mobile ?? ''} ${row.routeName ?? detailData?.route.name ?? ''}`.toLowerCase().includes(search))
+    return rows.filter((row) => !search || `${row.customerCode ?? ''} ${row.customerName} ${row.mobile ?? ''} ${row.city ?? ''} ${row.routeName ?? detailData?.route.name ?? ''}`.toLowerCase().includes(search))
   }, [detailData, detailSearch])
   return <Page title="Routes" subtitle="Track route-wise cylinders, parties, and movement history.">
     <div className="grid gap-4 xl:grid-cols-[300px_1fr]">

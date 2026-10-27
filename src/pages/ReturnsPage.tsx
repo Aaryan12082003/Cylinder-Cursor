@@ -10,6 +10,13 @@ import type { ReturnRow } from '@shared/types'
 
 type Line = { sizeId: string; quantity: string; condition: 'filled' | 'empty' | 'damaged' | 'lost' | 'maintenance'; serialNumbers: string }
 type CustomerRouteFields = { routeId?: number | null; routeName?: string }
+type ActiveRouteOption = { id: number; name: string; isActive: boolean }
+
+function activeCustomerRoute(customer: CustomerRouteFields | undefined, routes: ActiveRouteOption[] | undefined) {
+  if (customer?.routeId == null) return null
+  const route = routes?.find((item) => item.id === customer.routeId)
+  return route?.isActive ? route.id : null
+}
 
 export function ReturnsPage() {
   const [params] = useSearchParams()
@@ -67,10 +74,10 @@ export function ReturnsPage() {
   useEffect(() => {
     if (editing !== null || routeOverride || !form.customerId) return
     const customer = selectedCustomer as (CustomerRouteFields & { id: number }) | undefined
-    const customerRouteId = customer?.routeId ?? null
+    const customerRouteId = activeCustomerRoute(customer, settings.data?.routes)
     const nextRouteId = customerRouteId == null ? '' : String(customerRouteId)
     if (form.routeId !== nextRouteId) setForm((current) => ({ ...current, routeId: nextRouteId }))
-  }, [editing, form.customerId, form.routeId, routeOverride, selectedCustomer])
+  }, [editing, form.customerId, form.routeId, routeOverride, selectedCustomer, settings.data?.routes])
   return (
     <Page title="Receive cylinders" subtitle="Partial and mixed returns are supported. A customer cannot return more than their outstanding balance unless you authorize a reconciliation.">
       <div className="grid gap-4 xl:grid-cols-[420px_1fr]">
@@ -86,7 +93,7 @@ export function ReturnsPage() {
                   return
                 }
                 const customer = customers.data?.rows.find((item) => String(item.id) === customerId) as (CustomerRouteFields & { id: number }) | undefined
-                const customerRouteId = customer?.routeId ?? null
+                const customerRouteId = activeCustomerRoute(customer, settings.data?.routes)
                 setForm({ ...form, customerId, routeId: customerRouteId == null ? '' : String(customerRouteId) })
               }}>
                 <option value="">Choose customer</option>

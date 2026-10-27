@@ -10,6 +10,13 @@ import type { DispatchRow } from '@shared/types'
 
 type Line = { sizeId: string; quantity: string; condition: 'filled' | 'empty'; serialNumbers: string }
 type CustomerRouteFields = { routeId?: number | null; routeName?: string }
+type ActiveRouteOption = { id: number; name: string; isActive: boolean }
+
+function activeCustomerRoute(customer: CustomerRouteFields | undefined, routes: ActiveRouteOption[] | undefined) {
+  if (customer?.routeId == null) return null
+  const route = routes?.find((item) => item.id === customer.routeId)
+  return route?.isActive ? { id: route.id, name: customer.routeName || route.name } : null
+}
 
 export function DispatchPage() {
   const [params] = useSearchParams()
@@ -101,9 +108,9 @@ export function DispatchPage() {
   useEffect(() => {
     if (editing !== null || routeOverride || !form.customerId) return
     const customer = selectedCustomer as (typeof selectedCustomer & CustomerRouteFields) | undefined
-    const customerRouteId = customer?.routeId ?? null
-    const nextRouteId = customerRouteId == null ? '' : String(customerRouteId)
-    const nextRouteName = customerRouteId == null ? '' : customer?.routeName ?? settings.data?.routes.find((route) => route.id === customerRouteId)?.name ?? ''
+    const customerRoute = activeCustomerRoute(customer, settings.data?.routes)
+    const nextRouteId = customerRoute == null ? '' : String(customerRoute.id)
+    const nextRouteName = customerRoute?.name ?? ''
     if (form.routeId !== nextRouteId) setForm((current) => ({ ...current, routeId: nextRouteId }))
     if (routeSearch !== nextRouteName) setRouteSearch(nextRouteName)
   }, [editing, form.customerId, form.routeId, routeOverride, routeSearch, selectedCustomer, settings.data?.routes])
@@ -123,9 +130,9 @@ export function DispatchPage() {
                   return
                 }
                 const customer = customers.data?.rows.find((item) => String(item.id) === customerId) as (CustomerRouteFields & { id: number }) | undefined
-                const customerRouteId = customer?.routeId ?? null
-                setForm({ ...form, customerId, routeId: customerRouteId == null ? '' : String(customerRouteId) })
-                setRouteSearch(customerRouteId == null ? '' : customer?.routeName ?? settings.data?.routes.find((route) => route.id === customerRouteId)?.name ?? '')
+                const customerRoute = activeCustomerRoute(customer, settings.data?.routes)
+                setForm({ ...form, customerId, routeId: customerRoute == null ? '' : String(customerRoute.id) })
+                setRouteSearch(customerRoute?.name ?? '')
               }}>
                 <option value="">Choose customer</option>
                 {customers.data?.rows.map((customer) => <option key={customer.id} value={customer.id}>{customer.partyName}</option>)}

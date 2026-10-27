@@ -314,7 +314,7 @@ function CustomerProfile({ id, onClose, onEdit }: { id: number | null; onClose: 
             <Info label="Email" value={row.email} />
             <Info label="GSTIN" value={row.gstNumber} />
             <Info label="City" value={[row.city, row.state, row.pinCode].filter(Boolean).join(', ')} />
-            <Info label="Route" value={(row as CustomerRow & CustomerRouteFields).routeName ?? 'No route assigned'} />
+            <Info label="Route" value={(row as CustomerRow & CustomerRouteFields).routeName || 'No route assigned'} />
             <Info label="Overdue alert" value={row.alertThresholdDays ? `${row.alertThresholdDays} days` : 'Global default'} />
             <Info label="Created" value={formatDateOnly(row.createdAt.slice(0, 10))} />
           </div>
