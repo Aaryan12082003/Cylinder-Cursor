@@ -122,6 +122,7 @@ describe('route detail and document route snapshots', () => {
       lines: [{ sizeId: env.sizes['3L'], quantity: 1, condition: 'filled' }],
     })
     const zeroBalanceCustomer = createCustomer(env.ctx, fields({ partyName: 'Zero balance customer', routeId: route.id, mobile: '9845011123', city: 'Vadodara' }))
+    const openingCustomer = createCustomer(env.ctx, fields({ partyName: 'Opening balance customer', routeId: route.id, mobile: '9845011124', city: 'Rajkot', openingBalances: [{ sizeId: env.sizes['3L'], quantity: 2 }] }))
     updateRoute(env.ctx, { id: route.id, name: 'Renamed route', isActive: true })
     expect(getDispatch(env.ctx, dispatch.id).routeName).toBe('Original route')
 
@@ -129,6 +130,7 @@ describe('route detail and document route snapshots', () => {
     expect(detail.customers).toEqual([{ customerId: customer.id, customerCode: customer.code, customerName: customer.partyName, mobile: customer.mobile, city: customer.city, status: customer.status, totalOutstanding: 1 }])
     expect(routeDetail(env.ctx, { routeId: route.id, search: customer.city }).customers).toHaveLength(1)
     expect(routeDetail(env.ctx, { routeId: route.id }).customers?.find((item) => item.customerId === zeroBalanceCustomer.id)?.totalOutstanding).toBe(0)
+    expect(routeDetail(env.ctx, { routeId: route.id }).holdings).toEqual(expect.arrayContaining([{ customerId: openingCustomer.id, customerName: openingCustomer.partyName, mobile: openingCustomer.mobile, sizeName: '3 Litre', serialNumbers: [], quantity: 2 }]))
     expect(routeDetail(env.ctx, { routeId: route.id }).history).toHaveLength(1)
   })
 })

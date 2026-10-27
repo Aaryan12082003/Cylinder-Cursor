@@ -110,32 +110,27 @@ export function routeDetail(ctx: AppContext, input: { routeId: number; search?: 
     total_outstanding: number
   }[]
 
-  const customerIds = ctx.sqlite.prepare('SELECT DISTINCT customer_id FROM dispatches WHERE route_id = ?').all(input.routeId) as { customer_id: number }[]
+  // Holdings follow the customer's current route assignment. Transaction
+  // route IDs are historical and remain reserved for the history query above.
+  const customerIds = ctx.sqlite.prepare('SELECT id AS customer_id FROM customers WHERE route_id = ?').all(input.routeId) as { customer_id: number }[]
   const holdings: RouteDetail['holdings'] = []
   for (const { customer_id: customerId } of customerIds) {
     const rows = ctx.sqlite.prepare(`
-      SELECT d.customer_id, c.party_name AS customer_name, COALESCE(c.mobile, '') AS mobile,
-        cs.name AS size_name, di.size_id AS size_id,
-        SUM(di.quantity) - COALESCE((SELECT SUM(ri.quantity) FROM returns r2 JOIN return_items ri ON ri.return_id = r2.id
-          WHERE r2.route_id = ? AND r2.customer_id = d.customer_id AND ri.size_id = di.size_id AND r2.reversed_at IS NULL), 0) AS quantity
-      FROM dispatches d JOIN dispatch_items di ON di.dispatch_id = d.id
-        JOIN customers c ON c.id = d.customer_id JOIN cylinder_sizes cs ON cs.id = di.size_id
-      WHERE d.route_id = ? AND d.customer_id = ? AND d.reversed_at IS NULL
-      GROUP BY d.customer_id, di.size_id
-      HAVING SUM(di.quantity) - COALESCE((SELECT SUM(ri.quantity) FROM returns r3 JOIN return_items ri ON ri.return_id = r3.id
-        WHERE r3.route_id = ? AND r3.customer_id = d.customer_id AND ri.size_id = di.size_id AND r3.reversed_at IS NULL), 0) > 0
-    `).all(input.routeId, input.routeId, customerId, input.routeId) as { customer_id: number; customer_name: string; mobile: string; size_name: string; size_id: number; quantity: number }[]
+      SELECT c.id AS customer_id, c.party_name AS customer_name, COALESCE(c.mobile, '') AS mobile,
+        cs.name AS size_name, cb.size_id AS size_id, cb.outstanding AS quantity
+      FROM customers c
+      JOIN customer_balances cb ON cb.customer_id = c.id
+      JOIN cylinder_sizes cs ON cs.id = cb.size_id
+      WHERE c.id = ? AND cb.outstanding > 0
+      ORDER BY cs.sort_order, cs.id
+    `).all(customerId) as { customer_id: number; customer_name: string; mobile: string; size_name: string; size_id: number; quantity: number }[]
     for (const row of rows) {
       const serials = ctx.sqlite.prepare(`
         SELECT DISTINCT cy.serial_number
-        FROM dispatches d
-        JOIN dispatch_items di ON di.dispatch_id = d.id
-        JOIN dispatch_item_serials dis ON dis.dispatch_item_id = di.id
-        JOIN cylinders cy ON cy.id = dis.cylinder_id
-        WHERE d.route_id = ? AND d.customer_id = ? AND d.reversed_at IS NULL
-          AND di.size_id = ? AND cy.status = 'with_customer'
+        FROM cylinders cy
+        WHERE cy.customer_id = ? AND cy.size_id = ? AND cy.status = 'with_customer'
         ORDER BY cy.serial_number
-      `).all(input.routeId, customerId, row.size_id) as { serial_number: string }[]
+      `).all(customerId, row.size_id) as { serial_number: string }[]
       const haystack = `${row.customer_name} ${row.mobile} ${row.size_name} ${serials.map((item) => item.serial_number).join(' ')}`.toLowerCase()
       if (!pattern || haystack.includes(search)) holdings.push({ customerId: row.customer_id, customerName: row.customer_name, mobile: row.mobile, sizeName: row.size_name, serialNumbers: serials.map((item) => item.serial_number), quantity: row.quantity })
     }
