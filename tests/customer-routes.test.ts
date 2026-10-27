@@ -89,6 +89,8 @@ describe('customer route assignment', () => {
     const timestamp = new Date().toISOString()
     env.ctx.sqlite.prepare('INSERT INTO routes (name, is_active, created_at, updated_at) VALUES (?, 1, ?, ?)').run('rajkot', timestamp, timestamp)
     const route = env.ctx.sqlite.prepare('SELECT id FROM routes WHERE name = ?').get('rajkot') as { id: number }
+    // Simulate a database created before the one-time route-history migration.
+    env.ctx.sqlite.prepare('DELETE FROM schema_migrations WHERE name = ?').run('002_customer_route_history_backfill')
     const path = env.ctx.path
     env.close()
     const reopened = openDatabase(path)
@@ -114,6 +116,7 @@ describe('customer route assignment', () => {
       INSERT INTO returns (number, return_date, customer_id, route_id, route_name, created_by, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?)
     `).run('LEGACY-RTN-1', '2026-10-27', customer.id, routeId, 'Historical route', 'Legacy migration', timestamp)
+    env.ctx.sqlite.prepare('DELETE FROM schema_migrations WHERE name = ?').run('002_customer_route_history_backfill')
     const path = env.ctx.path
     env.close()
     const reopened = openDatabase(path)
@@ -122,6 +125,17 @@ describe('customer route assignment', () => {
     expect(getCustomer(reopened, customer.id).routeId).toBe(routeId)
     const afterBalance = reopened.sqlite.prepare('SELECT outstanding FROM customer_balances WHERE customer_id = ? AND size_id = ?').get(customer.id, env.sizes['3L']) as { outstanding: number }
     expect(afterBalance.outstanding).toBe(beforeBalance.outstanding)
+    expect(reopened.sqlite.prepare('SELECT count(*) AS count FROM schema_migrations WHERE name = ?').get('002_customer_route_history_backfill')).toEqual({ count: 1 })
+
+    // A later explicit clear is a user decision, not a migration candidate;
+    // reopening must not reassign the customer from the old snapshots.
+    updateCustomer(reopened, { id: customer.id, ...fields({ city: 'History City', routeId: null }) })
+    const firstReopened = open.pop()
+    firstReopened?.close()
+    const reopenedAgain = openDatabase(path)
+    open.push({ close: () => closeDatabase(reopenedAgain) })
+    expect(getCustomer(reopenedAgain, customer.id).routeId).toBeNull()
+    expect(reopenedAgain.sqlite.prepare('SELECT count(*) AS count FROM schema_migrations WHERE name = ?').get('002_customer_route_history_backfill')).toEqual({ count: 1 })
   })
 
   it('leaves a customer unassigned when non-reversed snapshots conflict across routes', () => {
@@ -140,6 +154,7 @@ describe('customer route assignment', () => {
       INSERT INTO returns (number, return_date, customer_id, route_id, route_name, created_by, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?)
     `).run('CONFLICT-RTN-1', '2026-10-27', customer.id, routeB, 'Historical B', 'Legacy migration', timestamp)
+    env.ctx.sqlite.prepare('DELETE FROM schema_migrations WHERE name = ?').run('002_customer_route_history_backfill')
     const path = env.ctx.path
     env.close()
     const reopened = openDatabase(path)

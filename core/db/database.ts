@@ -237,81 +237,87 @@ function ensureIncrementalSchema(sqlite: Database.Database) {
   const returnColumns = columnNames(sqlite, 'returns')
   if (!returnColumns.has('route_id')) sqlite.exec('ALTER TABLE returns ADD COLUMN route_id INTEGER REFERENCES routes(id)')
   if (!returnColumns.has('route_name')) sqlite.exec('ALTER TABLE returns ADD COLUMN route_name TEXT')
-  const backfill = sqlite.transaction(() => {
-    // Older route-aware databases stored only route_id on documents. Capture
-    // the current name before a user can rename the route so historical rows
-    // retain the name that was recorded at migration time.
-    sqlite.exec(`
-      UPDATE dispatches
-      SET route_name = (SELECT name FROM routes WHERE routes.id = dispatches.route_id)
-      WHERE route_name IS NULL AND route_id IS NOT NULL;
-      UPDATE returns
-      SET route_name = (SELECT name FROM routes WHERE routes.id = returns.route_id)
-      WHERE route_name IS NULL AND route_id IS NOT NULL;
-    `)
-    const updatedAt = new Date().toISOString()
-    // Recover an assignment from non-reversed historical snapshots only when
-    // every valid snapshot points to one distinct route. Invalid route IDs are
-    // ignored; conflicting valid routes deliberately remain unassigned.
-    sqlite
-      .prepare(`
-        WITH snapshot_routes AS (
-          SELECT d.customer_id, d.route_id
-          FROM dispatches d
-          INNER JOIN routes r ON r.id = d.route_id
-          WHERE d.route_id IS NOT NULL AND d.reversed_at IS NULL
-          UNION ALL
-          SELECT rdoc.customer_id, rdoc.route_id
-          FROM returns rdoc
-          INNER JOIN routes r ON r.id = rdoc.route_id
-          WHERE rdoc.route_id IS NOT NULL AND rdoc.reversed_at IS NULL
-        ), unique_routes AS (
-          SELECT customer_id, MIN(route_id) AS route_id
-          FROM snapshot_routes
-          GROUP BY customer_id
-          HAVING COUNT(DISTINCT route_id) = 1
-        )
-        UPDATE customers
-        SET route_id = (SELECT route_id FROM unique_routes WHERE unique_routes.customer_id = customers.id),
-            updated_at = ?
-        WHERE customers.route_id IS NULL
-          AND EXISTS (SELECT 1 FROM unique_routes WHERE unique_routes.customer_id = customers.id)
-      `)
-      .run(updatedAt)
-    // City matching remains a useful fallback for customers with no usable
-    // historical route snapshot. Never let it override a conflict that needs
-    // a manual profile decision.
-    sqlite
-      .prepare(`
-        UPDATE customers
-        SET route_id = (
-          SELECT r.id
-          FROM routes r
-          WHERE r.is_active = 1
-            AND lower(trim(r.name)) = lower(trim(customers.city))
-        ),
-            updated_at = ?
-        WHERE customers.route_id IS NULL
-          AND customers.city IS NOT NULL
-          AND length(trim(customers.city)) > 0
-          AND NOT EXISTS (
-            SELECT 1 FROM dispatches d
-            WHERE d.customer_id = customers.id AND d.reversed_at IS NULL
+  // Older route-aware databases stored only route_id on documents. Capture
+  // the current name before a user can rename the route so historical rows
+  // retain the name that was recorded at migration time. This remains safe to
+  // run on every startup, including after a legacy route_name column is added.
+  sqlite.exec(`
+    UPDATE dispatches
+    SET route_name = (SELECT name FROM routes WHERE routes.id = dispatches.route_id)
+    WHERE route_name IS NULL AND route_id IS NOT NULL;
+    UPDATE returns
+    SET route_name = (SELECT name FROM routes WHERE routes.id = returns.route_id)
+    WHERE route_name IS NULL AND route_id IS NOT NULL;
+  `)
+  const routeHistoryBackfill = '002_customer_route_history_backfill'
+  const hasRouteHistoryBackfill = sqlite.prepare('SELECT 1 FROM schema_migrations WHERE name = ? LIMIT 1').get(routeHistoryBackfill)
+  if (!hasRouteHistoryBackfill) {
+    const backfill = sqlite.transaction(() => {
+      const updatedAt = new Date().toISOString()
+      // Recover an assignment from non-reversed historical snapshots only when
+      // every valid snapshot points to one distinct route. Invalid route IDs are
+      // ignored; conflicting valid routes deliberately remain unassigned.
+      sqlite
+        .prepare(`
+          WITH snapshot_routes AS (
+            SELECT d.customer_id, d.route_id
+            FROM dispatches d
+            INNER JOIN routes r ON r.id = d.route_id
+            WHERE d.route_id IS NOT NULL AND d.reversed_at IS NULL
+            UNION ALL
+            SELECT rdoc.customer_id, rdoc.route_id
+            FROM returns rdoc
+            INNER JOIN routes r ON r.id = rdoc.route_id
+            WHERE rdoc.route_id IS NOT NULL AND rdoc.reversed_at IS NULL
+          ), unique_routes AS (
+            SELECT customer_id, MIN(route_id) AS route_id
+            FROM snapshot_routes
+            GROUP BY customer_id
+            HAVING COUNT(DISTINCT route_id) = 1
           )
-          AND NOT EXISTS (
-            SELECT 1 FROM returns rdoc
-            WHERE rdoc.customer_id = customers.id AND rdoc.reversed_at IS NULL
-          )
-          AND (
-            SELECT count(*)
+          UPDATE customers
+          SET route_id = (SELECT route_id FROM unique_routes WHERE unique_routes.customer_id = customers.id),
+              updated_at = ?
+          WHERE customers.route_id IS NULL
+            AND EXISTS (SELECT 1 FROM unique_routes WHERE unique_routes.customer_id = customers.id)
+        `)
+        .run(updatedAt)
+      // City matching remains a useful fallback for customers with no usable
+      // historical route snapshot. Never let it override a conflict that needs
+      // a manual profile decision.
+      sqlite
+        .prepare(`
+          UPDATE customers
+          SET route_id = (
+            SELECT r.id
             FROM routes r
             WHERE r.is_active = 1
               AND lower(trim(r.name)) = lower(trim(customers.city))
-          ) = 1
-      `)
-      .run(updatedAt)
-  })
-  backfill()
+          ),
+              updated_at = ?
+          WHERE customers.route_id IS NULL
+            AND customers.city IS NOT NULL
+            AND length(trim(customers.city)) > 0
+            AND NOT EXISTS (
+              SELECT 1 FROM dispatches d
+              WHERE d.customer_id = customers.id AND d.reversed_at IS NULL
+            )
+            AND NOT EXISTS (
+              SELECT 1 FROM returns rdoc
+              WHERE rdoc.customer_id = customers.id AND rdoc.reversed_at IS NULL
+            )
+            AND (
+              SELECT count(*)
+              FROM routes r
+              WHERE r.is_active = 1
+                AND lower(trim(r.name)) = lower(trim(customers.city))
+            ) = 1
+        `)
+        .run(updatedAt)
+      sqlite.prepare('INSERT INTO schema_migrations (name, applied_at) VALUES (?, ?)').run(routeHistoryBackfill, updatedAt)
+    })
+    backfill()
+  }
   sqlite.exec('CREATE INDEX IF NOT EXISTS idx_dispatches_route ON dispatches(route_id); CREATE INDEX IF NOT EXISTS idx_returns_route ON returns(route_id)')
 }
 
