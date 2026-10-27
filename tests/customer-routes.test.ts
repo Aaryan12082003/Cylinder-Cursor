@@ -1,11 +1,14 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import Database from 'better-sqlite3'
+import type { RouteDetail } from '@shared/types'
 import { createCustomer, getCustomer, listCustomers, updateCustomer } from '../core/services/customers'
 import { createDispatch, getDispatch } from '../core/services/documents'
 import { createRoute, deleteRoute, routeDetail, updateRoute } from '../core/services/routes'
 import { setOpeningBalances } from '../core/services/inventory'
 import { closeDatabase, openDatabase } from '../core/db/database'
-import { tempContext } from './helpers'
+import { buildHandlers } from '../core/handlers'
+import { invokeHandler } from '../core/invoke'
+import { fakeHost, tempContext } from './helpers'
 
 const open: { close: () => void }[] = []
 afterEach(() => {
@@ -105,7 +108,7 @@ describe('customer route assignment', () => {
 })
 
 describe('route detail and document route snapshots', () => {
-  it('searches assigned customers and preserves the route name on documents after rename', () => {
+  it('searches assigned customers and preserves the route name on documents after rename', async () => {
     const env = tempContext(() => new Date('2026-10-27T10:00:00.000Z'))
     open.push(env)
     setOpeningBalances(env.ctx, { rows: [{ sizeId: env.sizes['3L'], filled: 5, empty: 0, damaged: 0, maintenance: 0, notes: '' }] })
@@ -132,6 +135,9 @@ describe('route detail and document route snapshots', () => {
     expect(routeDetail(env.ctx, { routeId: route.id, search: customer.code }).holdings).toHaveLength(1)
     expect(routeDetail(env.ctx, { routeId: route.id, search: customer.city }).holdings).toHaveLength(1)
     expect(routeDetail(env.ctx, { routeId: route.id, search: 'CH-1' }).holdings).toHaveLength(1)
+    const apiResult = await invokeHandler(buildHandlers(env.ctx, fakeHost(env.dir, env.ctx)), 'routes:detail', { routeId: route.id, search: 'CH-1' })
+    expect(apiResult.ok).toBe(true)
+    if (apiResult.ok) expect((apiResult.data as RouteDetail).customers?.some((item) => item.customerId === customer.id)).toBe(true)
     expect(routeDetail(env.ctx, { routeId: route.id }).customers?.find((item) => item.customerId === zeroBalanceCustomer.id)?.totalOutstanding).toBe(0)
     expect(routeDetail(env.ctx, { routeId: route.id }).holdings).toEqual(expect.arrayContaining([{ customerId: openingCustomer.id, customerName: openingCustomer.partyName, mobile: openingCustomer.mobile, sizeName: '3 Litre', serialNumbers: [], quantity: 2 }]))
     expect(routeDetail(env.ctx, { routeId: route.id }).history).toHaveLength(1)
