@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { formatCount, formatDateOnly, todayIso } from '@shared/dates'
 import { Pencil, Plus, Trash2, Truck } from 'lucide-react'
-import { useEffect, useMemo, useState, type Dispatch, type SetStateAction } from 'react'
+import { useMemo, useState, type Dispatch, type SetStateAction } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { Badge, Button, Card, ConfirmDialog, Dialog, DialogContent, EmptyState, Field, Input, Page, Pagination, Select, Textarea } from '@/components/ui'
@@ -9,14 +9,6 @@ import { api } from '@/lib/api'
 import type { DispatchRow } from '@shared/types'
 
 type Line = { sizeId: string; quantity: string; condition: 'filled' | 'empty'; serialNumbers: string }
-type CustomerRouteFields = { routeId?: number | null; routeName?: string }
-type ActiveRouteOption = { id: number; name: string; isActive: boolean }
-
-function activeCustomerRoute(customer: CustomerRouteFields | undefined, routes: ActiveRouteOption[] | undefined) {
-  if (customer?.routeId == null) return null
-  const route = routes?.find((item) => item.id === customer.routeId)
-  return route?.isActive ? { id: route.id, name: customer.routeName || route.name } : null
-}
 
 export function DispatchPage() {
   const [params] = useSearchParams()
@@ -28,31 +20,21 @@ export function DispatchPage() {
   const [form, setForm] = useState({
     date: todayIso(),
     customerId: params.get('customer') ?? '',
-    routeId: '',
     vehicleNumber: '',
     challanNumber: '',
     driverName: '',
     remarks: '',
   })
-  const [routeSearch, setRouteSearch] = useState('')
-  const [routeOpen, setRouteOpen] = useState(false)
-  const [routeDialog, setRouteDialog] = useState(false)
-  const [newRouteName, setNewRouteName] = useState('')
-  const [routeOverride, setRouteOverride] = useState(false)
   const [lines, setLines] = useState<Line[]>([{ sizeId: '', quantity: '', condition: 'filled', serialNumbers: '' }])
   const [confirm, setConfirm] = useState(false)
   const [editing, setEditing] = useState<number | null>(null)
   const [reverse, setReverse] = useState<number | null>(null)
   const [reason, setReason] = useState('')
   const sizes = settings.data?.sizes.filter((size) => size.isActive) ?? []
-  const selectedRoute = settings.data?.routes.find((route) => String(route.id) === form.routeId)
-  const selectedCustomer = customers.data?.rows.find((customer) => String(customer.id) === form.customerId)
-  const routeOptions = settings.data?.routes.filter((route) => (route.isActive || route.id === selectedRoute?.id) && route.name.toLowerCase().includes(routeSearch.trim().toLowerCase())) ?? []
   const total = lines.reduce((sum, line) => sum + (Number(line.quantity) || 0), 0)
   const payload = useMemo(() => ({
     ...form,
     customerId: Number(form.customerId),
-    routeId: form.routeId ? Number(form.routeId) : null,
     lines: lines.filter((line) => line.sizeId && Number(line.quantity) > 0).map((line) => ({ sizeId: Number(line.sizeId), quantity: Number(line.quantity), condition: line.condition, serialNumbers: line.serialNumbers.split(/[\n,]+/).map((value) => value.trim()).filter(Boolean) })),
   }), [form, lines])
   const create = useMutation({
@@ -62,7 +44,6 @@ export function DispatchPage() {
       setConfirm(false)
       setLines([{ sizeId: '', quantity: '', condition: 'filled', serialNumbers: '' }])
       setForm((current) => ({ ...current, remarks: '', challanNumber: '', vehicleNumber: '', driverName: '' }))
-      setRouteOverride(false)
       qc.invalidateQueries()
     },
     onError: (error: Error) => toast.error(error.message),
@@ -73,7 +54,7 @@ export function DispatchPage() {
       toast.success(`${dispatch.number} updated`)
       setConfirm(false)
       setEditing(null)
-      resetForm(setForm, setLines, setRouteSearch, setRouteOverride)
+      resetForm(setForm, setLines)
       qc.invalidateQueries()
     },
     onError: (error: Error) => toast.error(error.message),
@@ -88,72 +69,18 @@ export function DispatchPage() {
     },
     onError: (error: Error) => toast.error(error.message),
   })
-  const addRoute = useMutation({
-    mutationFn: () => api.createRoute({ name: newRouteName.trim() }),
-    onSuccess: (route) => {
-      toast.success('Route added')
-      setForm((current) => ({ ...current, routeId: String(route.id) }))
-      setRouteOverride(true)
-      setRouteSearch(route.name)
-      setNewRouteName('')
-      setRouteDialog(false)
-      qc.invalidateQueries({ queryKey: ['settings'] })
-    },
-    onError: (error: Error) => toast.error(error.message),
-  })
-
-  // Default new documents to the selected customer's assigned route. A route
-  // chosen in this form is explicit and must remain intact; edits always keep
-  // the route stored on the historical document.
-  useEffect(() => {
-    if (editing !== null || routeOverride || !form.customerId) return
-    const customer = selectedCustomer as (typeof selectedCustomer & CustomerRouteFields) | undefined
-    const customerRoute = activeCustomerRoute(customer, settings.data?.routes)
-    const nextRouteId = customerRoute == null ? '' : String(customerRoute.id)
-    const nextRouteName = customerRoute?.name ?? ''
-    if (form.routeId !== nextRouteId) setForm((current) => ({ ...current, routeId: nextRouteId }))
-    if (routeSearch !== nextRouteName) setRouteSearch(nextRouteName)
-  }, [editing, form.customerId, form.routeId, routeOverride, routeSearch, selectedCustomer, settings.data?.routes])
-
   return (
     <Page title="Dispatch cylinders" subtitle="Send one or more sizes in a single challan. Stock and customer balances update together.">
       <div className="grid gap-4 xl:grid-cols-[420px_1fr]">
         <Card className="p-5">
-          <div className="flex items-center justify-between gap-3"><h2 className="text-base font-semibold">{editing ? 'Edit dispatch' : 'New dispatch'}</h2><div className="flex items-center gap-2"><Button size="sm" onClick={() => setConfirm(true)} disabled={!payload.customerId || payload.lines.length === 0}>{editing ? 'Review changes' : 'Review dispatch'}</Button>{editing ? <Button size="sm" variant="ghost" onClick={() => { setEditing(null); resetForm(setForm, setLines, setRouteSearch, setRouteOverride) }}>Cancel</Button> : null}</div></div>
+          <div className="flex items-center justify-between gap-3"><h2 className="text-base font-semibold">{editing ? 'Edit dispatch' : 'New dispatch'}</h2><div className="flex items-center gap-2"><Button size="sm" onClick={() => setConfirm(true)} disabled={!payload.customerId || payload.lines.length === 0}>{editing ? 'Review changes' : 'Review dispatch'}</Button>{editing ? <Button size="sm" variant="ghost" onClick={() => { setEditing(null); resetForm(setForm, setLines) }}>Cancel</Button> : null}</div></div>
           <div className="mt-4 grid gap-3">
             <Field label="Date"><Input type="date" value={form.date} onChange={(event) => setForm({ ...form, date: event.target.value })} /></Field>
             <Field label="Customer">
-              <Select value={form.customerId} onChange={(event) => {
-                const customerId = event.target.value
-                if (routeOverride) {
-                  setForm({ ...form, customerId })
-                  return
-                }
-                const customer = customers.data?.rows.find((item) => String(item.id) === customerId) as (CustomerRouteFields & { id: number }) | undefined
-                const customerRoute = activeCustomerRoute(customer, settings.data?.routes)
-                setForm({ ...form, customerId, routeId: customerRoute == null ? '' : String(customerRoute.id) })
-                setRouteSearch(customerRoute?.name ?? '')
-              }}>
+              <Select value={form.customerId} onChange={(event) => setForm({ ...form, customerId: event.target.value })}>
                 <option value="">Choose customer</option>
                 {customers.data?.rows.map((customer) => <option key={customer.id} value={customer.id}>{customer.partyName}</option>)}
               </Select>
-            </Field>
-            <Field label="Route (optional)">
-              <div className="relative flex gap-2">
-                <Input role="combobox" aria-expanded={routeOpen} aria-controls="dispatch-route-options" placeholder="Search or choose route" value={routeSearch} onFocus={() => setRouteOpen(true)} onKeyDown={(event) => { if (event.key === 'Escape') setRouteOpen(false) }} onChange={(event) => {
-                  const value = event.target.value
-                  const match = settings.data?.routes.find((route) => route.isActive && route.name.toLowerCase() === value.trim().toLowerCase())
-                  setRouteOverride(true)
-                  setRouteSearch(value)
-                  setForm({ ...form, routeId: match ? String(match.id) : '' })
-                }} />
-                <Button type="button" variant="secondary" onClick={() => { setNewRouteName(routeSearch.trim()); setRouteDialog(true) }}>Add route</Button>
-                {routeOpen ? <div id="dispatch-route-options" role="listbox" className="absolute left-0 top-11 z-20 max-h-52 w-[calc(100%-92px)] overflow-auto rounded-lg border border-border bg-surface p-1 shadow-lg">
-                  <button type="button" role="option" aria-selected={!form.routeId} className="block w-full rounded px-3 py-2 text-left text-sm text-muted hover:bg-background" onMouseDown={(event) => event.preventDefault()} onClick={() => { setRouteOverride(true); setForm({ ...form, routeId: '' }); setRouteSearch(''); setRouteOpen(false) }}>No route</button>
-                  {routeOptions.map((route) => <button type="button" role="option" aria-selected={form.routeId === String(route.id)} key={route.id} className="block w-full rounded px-3 py-2 text-left text-sm hover:bg-background" onMouseDown={(event) => event.preventDefault()} onClick={() => { setRouteOverride(true); setForm({ ...form, routeId: String(route.id) }); setRouteSearch(route.name); setRouteOpen(false) }}>{route.name}{route.isActive ? '' : ' (inactive)'}</button>)}
-                  {routeOptions.length === 0 ? <div className="px-3 py-2 text-sm text-muted">No matching routes</div> : null}
-                </div> : null}
-              </div>
             </Field>
             <div className="space-y-2">
               {lines.map((line, index) => (
@@ -194,7 +121,7 @@ export function DispatchPage() {
                   <td className="px-4 py-3">{row.reversedAt ? <Badge tone="warning">Reversed</Badge> : <Badge tone="success">Posted</Badge>}</td>
                   <td className="px-4 py-3 text-right">
                     <Button size="sm" variant="ghost" onClick={() => api.challan(row.id).catch((error: Error) => toast.error(error.message))}>Challan</Button>
-                    {row.reversedAt ? null : <><Button size="sm" variant="ghost" onClick={() => beginEditDispatch(row, setEditing, setForm, setLines, setRouteSearch, setRouteOverride)}> <Pencil className="mr-1 h-3.5 w-3.5" />Edit</Button><Button size="sm" variant="ghost" onClick={() => setReverse(row.id)}>Undo mistake</Button></>}
+                    {row.reversedAt ? null : <><Button size="sm" variant="ghost" onClick={() => beginEditDispatch(row, setEditing, setForm, setLines)}> <Pencil className="mr-1 h-3.5 w-3.5" />Edit</Button><Button size="sm" variant="ghost" onClick={() => setReverse(row.id)}>Undo mistake</Button></>}
                   </td>
                 </tr>
               ))}
@@ -218,12 +145,6 @@ export function DispatchPage() {
           <div className="mt-4 flex justify-end"><Button variant="danger" onClick={() => undo.mutate()} disabled={reason.trim().length < 5}>Undo dispatch</Button></div>
         </DialogContent>
       </Dialog>
-      <Dialog open={routeDialog} onOpenChange={(open) => { if (!open && !addRoute.isPending) setRouteDialog(false) }}>
-        <DialogContent title="Add route" description="Create a route and use it for this dispatch.">
-          <Field label="Route name"><Input autoFocus value={newRouteName} onChange={(event) => setNewRouteName(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && newRouteName.trim().length >= 2) addRoute.mutate() }} placeholder="e.g. Jaipur" /></Field>
-          <div className="mt-4 flex justify-end"><Button type="button" onClick={() => addRoute.mutate()} disabled={addRoute.isPending || newRouteName.trim().length < 2}>{addRoute.isPending ? 'Adding…' : 'Add and select'}</Button></div>
-        </DialogContent>
-      </Dialog>
     </Page>
   )
 }
@@ -233,28 +154,20 @@ function updateLine(setLines: (value: Line[] | ((current: Line[]) => Line[])) =>
 }
 
 function resetForm(
-  setForm: Dispatch<SetStateAction<{ date: string; customerId: string; routeId: string; vehicleNumber: string; challanNumber: string; driverName: string; remarks: string }>>,
+  setForm: Dispatch<SetStateAction<{ date: string; customerId: string; vehicleNumber: string; challanNumber: string; driverName: string; remarks: string }>>,
   setLines: Dispatch<SetStateAction<Line[]>>,
-  setRouteSearch: Dispatch<SetStateAction<string>>,
-  setRouteOverride: Dispatch<SetStateAction<boolean>>,
 ) {
-  setForm((current) => ({ ...current, date: todayIso(), routeId: '', vehicleNumber: '', challanNumber: '', driverName: '', remarks: '' }))
+  setForm((current) => ({ ...current, date: todayIso(), vehicleNumber: '', challanNumber: '', driverName: '', remarks: '' }))
   setLines([{ sizeId: '', quantity: '', condition: 'filled', serialNumbers: '' }])
-  setRouteSearch('')
-  setRouteOverride(false)
 }
 
 function beginEditDispatch(
   row: DispatchRow,
   setEditing: Dispatch<SetStateAction<number | null>>,
-  setForm: Dispatch<SetStateAction<{ date: string; customerId: string; routeId: string; vehicleNumber: string; challanNumber: string; driverName: string; remarks: string }>>,
+  setForm: Dispatch<SetStateAction<{ date: string; customerId: string; vehicleNumber: string; challanNumber: string; driverName: string; remarks: string }>>,
   setLines: Dispatch<SetStateAction<Line[]>>,
-  setRouteSearch: Dispatch<SetStateAction<string>>,
-  setRouteOverride: Dispatch<SetStateAction<boolean>>,
 ) {
   setEditing(row.id)
-  setForm({ date: row.date, customerId: String(row.customerId), routeId: row.routeId ? String(row.routeId) : '', vehicleNumber: row.vehicleNumber, challanNumber: row.challanNumber, driverName: row.driverName, remarks: row.remarks })
-  setRouteSearch(row.routeName)
-  setRouteOverride(true)
+  setForm({ date: row.date, customerId: String(row.customerId), vehicleNumber: row.vehicleNumber, challanNumber: row.challanNumber, driverName: row.driverName, remarks: row.remarks })
   setLines(row.lines.map((line) => ({ sizeId: String(line.sizeId), quantity: String(line.quantity), condition: line.condition as Line['condition'], serialNumbers: (line.serialNumbers ?? []).join('\n') })))
 }
