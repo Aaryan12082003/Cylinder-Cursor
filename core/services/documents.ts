@@ -217,6 +217,7 @@ function resolveDocumentRoute(
       return historicalSnapshot.routeName === null ? null : { id: null, name: historicalSnapshot.routeName }
     }
     const route = requireRoute(db, historicalSnapshot.routeId, { active: false })
+    if (!route) throw new BusinessError('Route not found.')
     // The name snapshot is intentionally preferred on replacement rows. Route
     // names may have changed since the original document was posted.
     return { id: route.id, name: historicalSnapshot.routeName ?? route.name }
