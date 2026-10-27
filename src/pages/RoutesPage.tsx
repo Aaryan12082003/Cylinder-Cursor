@@ -44,7 +44,20 @@ export function RoutesPage() {
   const assignedCustomers = useMemo(() => {
     const rows = detailData?.assignedCustomers ?? detailData?.customers ?? detailData?.customerAssignments ?? []
     const search = detailSearch.trim().toLowerCase()
-    return rows.filter((row) => !search || `${row.customerCode ?? ''} ${row.customerName} ${row.mobile ?? ''} ${row.city ?? ''} ${row.routeName ?? detailData?.route.name ?? ''}`.toLowerCase().includes(search))
+    if (!search) return rows
+    const movementMatches = new Set<number>()
+    detailData?.holdings.forEach((row) => {
+      const haystack = `${row.customerName} ${row.mobile} ${row.sizeName} ${row.serialNumbers.join(' ')}`.toLowerCase()
+      if (haystack.includes(search)) movementMatches.add(row.customerId)
+    })
+    detailData?.history.forEach((row) => {
+      const haystack = `${row.customerName} ${row.number} ${row.challan}`.toLowerCase()
+      if (haystack.includes(search)) {
+        const historyCustomerId = (row as typeof row & { customerId?: number }).customerId
+        movementMatches.add(historyCustomerId ?? rows.find((customer) => customer.customerName === row.customerName)?.customerId ?? -1)
+      }
+    })
+    return rows.filter((row) => movementMatches.has(row.customerId) || `${row.customerCode ?? ''} ${row.customerName} ${row.mobile ?? ''} ${row.city ?? ''} ${row.routeName ?? detailData?.route.name ?? ''}`.toLowerCase().includes(search))
   }, [detailData, detailSearch])
   return <Page title="Routes" subtitle="Track route-wise cylinders, parties, and movement history.">
     <div className="grid gap-4 xl:grid-cols-[300px_1fr]">

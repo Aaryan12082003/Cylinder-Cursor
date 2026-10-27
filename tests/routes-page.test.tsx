@@ -121,4 +121,22 @@ describe('RoutesPage', () => {
       expect(screen.queryByText('Jaipur Gas')).toBeNull()
     })
   })
+
+  it('keeps the customer visible when search only matches holding or history details', async () => {
+    vi.mocked(api.routeDetail).mockResolvedValue({
+      ...routeDetail,
+      customers: [{ customerId: 42, customerCode: 'CUST-42', customerName: 'Route customer', mobile: '', city: '', status: 'active', totalOutstanding: 2 }],
+      holdings: [{ customerId: 42, customerName: 'Route customer', mobile: '', sizeName: '23 Ltr', serialNumbers: ['SER-23'], quantity: 2 }],
+      history: [{ id: 7, type: 'dispatch', number: 'DSP-7', date: '2026-10-27', customerName: 'Route customer', quantity: 2, challan: 'CHALLAN-7', reversed: false }],
+    })
+
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(<QueryClientProvider client={queryClient}><RoutesPage /></QueryClientProvider>)
+    const input = await screen.findByPlaceholderText('Search customer, cylinder size, serial, or challan')
+
+    fireEvent.change(input, { target: { value: 'SER-23' } })
+    await waitFor(() => expect(screen.getAllByText('Route customer').length).toBeGreaterThan(0))
+    fireEvent.change(input, { target: { value: 'CHALLAN-7' } })
+    await waitFor(() => expect(screen.getAllByText('Route customer').length).toBeGreaterThan(0))
+  })
 })
