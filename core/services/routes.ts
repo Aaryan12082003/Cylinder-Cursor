@@ -91,7 +91,8 @@ export function routeDetail(ctx: AppContext, input: { routeId: number; search?: 
   const search = (input.search ?? '').trim().toLowerCase()
   const customers = ctx.sqlite.prepare(`
     SELECT id AS customer_id, code AS customer_code, party_name AS customer_name,
-      COALESCE(mobile, '') AS mobile, COALESCE(city, '') AS city, status
+      COALESCE(mobile, '') AS mobile, COALESCE(city, '') AS city, status,
+      COALESCE((SELECT SUM(outstanding) FROM customer_balances cb WHERE cb.customer_id = customers.id), 0) AS total_outstanding
     FROM customers
     WHERE route_id = ?
       AND (? = '' OR lower(party_name) LIKE '%' || ? || '%'
@@ -106,6 +107,7 @@ export function routeDetail(ctx: AppContext, input: { routeId: number; search?: 
     mobile: string
     city: string
     status: 'active' | 'inactive'
+    total_outstanding: number
   }[]
 
   const customerIds = ctx.sqlite.prepare('SELECT DISTINCT customer_id FROM dispatches WHERE route_id = ?').all(input.routeId) as { customer_id: number }[]
@@ -140,7 +142,7 @@ export function routeDetail(ctx: AppContext, input: { routeId: number; search?: 
   }
   return {
     route: { id: route.id, name: route.name, isActive: Boolean(route.isActive) },
-    customers: customers.map((item) => ({ customerId: item.customer_id, customerCode: item.customer_code, customerName: item.customer_name, mobile: item.mobile, city: item.city, status: item.status })),
+    customers: customers.map((item) => ({ customerId: item.customer_id, customerCode: item.customer_code, customerName: item.customer_name, mobile: item.mobile, city: item.city, status: item.status, totalOutstanding: Number(item.total_outstanding) })),
     holdings,
     history: history.filter((item) => !search || `${item.number} ${item.customer_name} ${item.challan}`.toLowerCase().includes(search)).map((item) => ({ id: item.id, type: item.type, number: item.number, date: item.date, customerName: item.customer_name, quantity: item.quantity, challan: item.challan, reversed: Boolean(item.reversed) })),
   }

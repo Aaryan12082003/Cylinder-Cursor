@@ -121,12 +121,14 @@ describe('route detail and document route snapshots', () => {
       remarks: '',
       lines: [{ sizeId: env.sizes['3L'], quantity: 1, condition: 'filled' }],
     })
+    const zeroBalanceCustomer = createCustomer(env.ctx, fields({ partyName: 'Zero balance customer', routeId: route.id, mobile: '9845011123', city: 'Vadodara' }))
     updateRoute(env.ctx, { id: route.id, name: 'Renamed route', isActive: true })
     expect(getDispatch(env.ctx, dispatch.id).routeName).toBe('Original route')
 
     const detail = routeDetail(env.ctx, { routeId: route.id, search: customer.code })
-    expect(detail.customers).toEqual([{ customerId: customer.id, customerCode: customer.code, customerName: customer.partyName, mobile: customer.mobile, city: customer.city, status: customer.status }])
+    expect(detail.customers).toEqual([{ customerId: customer.id, customerCode: customer.code, customerName: customer.partyName, mobile: customer.mobile, city: customer.city, status: customer.status, totalOutstanding: 1 }])
     expect(routeDetail(env.ctx, { routeId: route.id, search: customer.city }).customers).toHaveLength(1)
+    expect(routeDetail(env.ctx, { routeId: route.id }).customers?.find((item) => item.customerId === zeroBalanceCustomer.id)?.totalOutstanding).toBe(0)
     expect(routeDetail(env.ctx, { routeId: route.id }).history).toHaveLength(1)
   })
 })

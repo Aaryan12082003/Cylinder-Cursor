@@ -275,7 +275,7 @@ export type AppSettings = {
 
 export type RouteDetail = {
   route: { id: number; name: string; isActive: boolean }
-  customers?: { customerId: number; customerCode: string; customerName: string; mobile: string; city: string; status: 'active' | 'inactive' }[]
+  customers?: { customerId: number; customerCode: string; customerName: string; mobile: string; city: string; status: 'active' | 'inactive'; totalOutstanding?: number }[]
   holdings: { customerId: number; customerName: string; mobile: string; sizeName: string; serialNumbers: string[]; quantity: number }[]
   history: { id: number; type: 'dispatch' | 'return'; number: string; date: string; customerName: string; quantity: number; challan: string; reversed: boolean }[]
 }
