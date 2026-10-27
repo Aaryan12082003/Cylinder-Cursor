@@ -85,7 +85,7 @@ describe('RoutesPage', () => {
   it('shows assigned customers even when the route has no movement history', async () => {
     vi.mocked(api.routeDetail).mockResolvedValue({
       ...routeDetail,
-      customers: [{ customerId: 42, customerCode: 'CUST-42', customerName: 'No-history customer', mobile: '9876543210', city: 'Jaipur', status: 'active' }],
+      customers: [{ customerId: 42, customerCode: 'CUST-42', customerName: 'No-history customer', mobile: '9876543210', city: 'Jaipur', status: 'active', totalOutstanding: 0 }],
     })
 
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -99,8 +99,8 @@ describe('RoutesPage', () => {
     vi.mocked(api.routeDetail).mockResolvedValue({
       ...routeDetail,
       customers: [
-        { customerId: 42, customerCode: 'CUST-42', customerName: 'Jaipur Gas', mobile: '9876543210', city: 'Jaipur', status: 'active' },
-        { customerId: 43, customerCode: 'CUST-43', customerName: 'Delhi Gas', mobile: '9876543211', city: 'Delhi', status: 'active' },
+        { customerId: 42, customerCode: 'CUST-42', customerName: 'Jaipur Gas', mobile: '9876543210', city: 'Jaipur', status: 'active', totalOutstanding: 4 },
+        { customerId: 43, customerCode: 'CUST-43', customerName: 'Delhi Gas', mobile: '9876543211', city: 'Delhi', status: 'active', totalOutstanding: 0 },
       ],
     })
 
@@ -111,6 +111,7 @@ describe('RoutesPage', () => {
     fireEvent.change(input, { target: { value: 'CUST-42' } })
     await waitFor(() => {
       expect(screen.getByText('Jaipur Gas')).toBeTruthy()
+      expect(screen.getByText('4')).toBeTruthy()
       expect(screen.queryByText('Delhi Gas')).toBeNull()
     })
 
