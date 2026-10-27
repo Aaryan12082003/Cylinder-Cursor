@@ -1,4 +1,4 @@
-import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { Button, Card, ConfirmDialog, Dialog, DialogContent, Field, Input, Page, Select } from '@/components/ui'
@@ -16,7 +16,7 @@ export function RoutesPage() {
   const [edit, setEdit] = useState<AppSettings['routes'][number] | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<AppSettings['routes'][number] | null>(null)
   const activeId = selectedId ?? routes[0]?.id ?? null
-  const detail = useQuery({ queryKey: ['route-detail', activeId, detailSearch], queryFn: () => api.routeDetail({ routeId: activeId, search: detailSearch }), enabled: activeId !== null, placeholderData: keepPreviousData })
+  const detail = useQuery({ queryKey: ['route-detail', activeId, detailSearch], queryFn: () => api.routeDetail({ routeId: activeId, search: detailSearch }), enabled: activeId !== null, placeholderData: (previous) => previous?.route.id === activeId ? previous : undefined })
   const add = useMutation({ mutationFn: () => api.createRoute({ name: name.trim() }), onSuccess: () => { toast.success('Route added'); setName(''); qc.invalidateQueries({ queryKey: ['settings'] }) }, onError: (error: Error) => toast.error(error.message) })
   const remove = useMutation({ mutationFn: (id: number) => api.deleteRoute(id), onSuccess: () => { toast.success('Route deleted'); setDeleteTarget(null); setSelectedId(null); qc.invalidateQueries({ queryKey: ['settings'] }) }, onError: (error: Error) => toast.error(error.message) })
   const filtered = useMemo(() => routes.filter((route) => route.name.toLowerCase().includes(routeSearch.toLowerCase())), [routes, routeSearch])

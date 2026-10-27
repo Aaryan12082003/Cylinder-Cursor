@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { RoutesPage } from '../src/pages/RoutesPage'
 import { api } from '../src/lib/api'
@@ -21,6 +21,7 @@ const routeDetail: RouteDetail = { route: { id: 1, name: 'North route', isActive
 
 describe('RoutesPage', () => {
   beforeEach(() => {
+    cleanup()
     vi.clearAllMocks()
     vi.mocked(api.settings).mockResolvedValue(settings)
   })
@@ -46,5 +47,35 @@ describe('RoutesPage', () => {
     })
 
     resolveSearch(routeDetail)
+  })
+
+  it('does not show the previous route while a newly selected route is loading', async () => {
+    const twoRoutes = {
+      routes: [
+        { id: 1, name: 'North route', isActive: true, createdAt: '', updatedAt: '' },
+        { id: 2, name: 'South route', isActive: true, createdAt: '', updatedAt: '' },
+      ],
+    } as AppSettings
+    vi.mocked(api.settings).mockResolvedValue(twoRoutes)
+    let resolveSouth!: (value: RouteDetail) => void
+    const pendingSouth = new Promise<RouteDetail>((resolve) => { resolveSouth = resolve })
+    vi.mocked(api.routeDetail).mockImplementation((payload) => {
+      const routeId = (payload as { routeId: number }).routeId
+      return routeId === 1 ? Promise.resolve(routeDetail) : pendingSouth
+    })
+
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(<QueryClientProvider client={queryClient}><RoutesPage /></QueryClientProvider>)
+
+    await screen.findByRole('heading', { name: 'North route' })
+    fireEvent.click(screen.getByRole('button', { name: /South route/ }))
+
+    await waitFor(() => {
+      expect(screen.queryByRole('heading', { name: 'North route' })).toBeNull()
+      expect(screen.queryByRole('button', { name: 'Edit' })).toBeNull()
+      expect(screen.queryByText('Cylinders currently held')).toBeNull()
+    })
+
+    resolveSouth({ route: { id: 2, name: 'South route', isActive: true }, holdings: [], history: [] })
   })
 })
