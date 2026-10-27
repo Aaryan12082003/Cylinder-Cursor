@@ -221,6 +221,7 @@ describe('route detail and document route snapshots', () => {
     const detail = routeDetail(env.ctx, { routeId: route.id, search: customer.code })
     expect(detail.customers).toEqual([{ customerId: customer.id, customerCode: customer.code, customerName: customer.partyName, mobile: customer.mobile, city: customer.city, status: customer.status, totalOutstanding: 1 }])
     expect(routeDetail(env.ctx, { routeId: route.id, search: customer.city }).customers).toHaveLength(1)
+    expect(routeDetail(env.ctx, { routeId: route.id, search: '_' }).customers).toHaveLength(0)
     expect(routeDetail(env.ctx, { routeId: route.id, search: customer.code }).holdings).toHaveLength(1)
     expect(routeDetail(env.ctx, { routeId: route.id, search: customer.city }).holdings).toHaveLength(1)
     expect(routeDetail(env.ctx, { routeId: route.id, search: 'CH-1' }).holdings).toHaveLength(1)

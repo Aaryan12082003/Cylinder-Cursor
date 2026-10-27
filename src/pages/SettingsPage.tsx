@@ -165,7 +165,7 @@ export function SettingsPage() {
         </Card>
         <Card className="p-5">
           <h2 className="text-base font-semibold">Route master</h2>
-          <p className="mt-1 text-sm text-muted">Create routes such as Jaipur or Udaipur. Select an active route when recording dispatches and returns.</p>
+          <p className="mt-1 text-sm text-muted">Create routes such as Jaipur or Udaipur. Customers are assigned automatically when their city matches a route, and you can change a customer’s route from their profile.</p>
           <div className="mt-3 divide-y divide-border">
             {draft.routes.map((route) => <div key={route.id} className="flex items-center justify-between py-2 text-sm">
               <span>{route.name}{route.isActive ? null : <span className="ml-2 text-xs text-muted">Inactive</span>}</span>

@@ -123,46 +123,46 @@ export function routeDetail(ctx: AppContext, input: { routeId: number; search?: 
       COALESCE((SELECT SUM(outstanding) FROM customer_balances cb WHERE cb.customer_id = customers.id), 0) AS total_outstanding
     FROM customers
     WHERE route_id = @routeId
-      AND (@search = '' OR lower(party_name) LIKE '%' || @search || '%'
-        OR lower(code) LIKE '%' || @search || '%'
-        OR lower(COALESCE(mobile, '')) LIKE '%' || @search || '%'
-        OR lower(COALESCE(city, '')) LIKE '%' || @search || '%'
+      AND (@search = '' OR instr(lower(party_name), @search) > 0
+        OR instr(lower(code), @search) > 0
+        OR instr(lower(COALESCE(mobile, '')), @search) > 0
+        OR instr(lower(COALESCE(city, '')), @search) > 0
         OR EXISTS (
           SELECT 1 FROM dispatches d
           WHERE d.route_id = @routeId AND d.customer_id = customers.id
-            AND (lower(d.number) LIKE '%' || @search || '%'
-              OR lower(COALESCE(d.challan_number, '')) LIKE '%' || @search || '%')
+            AND (instr(lower(d.number), @search) > 0
+              OR instr(lower(COALESCE(d.challan_number, '')), @search) > 0)
         )
         OR EXISTS (
           SELECT 1 FROM returns r
           WHERE r.route_id = @routeId AND r.customer_id = customers.id
-            AND (lower(r.number) LIKE '%' || @search || '%'
-              OR lower(COALESCE(r.challan_reference, '')) LIKE '%' || @search || '%')
+            AND (instr(lower(r.number), @search) > 0
+              OR instr(lower(COALESCE(r.challan_reference, '')), @search) > 0)
         )
         OR EXISTS (
           SELECT 1 FROM dispatches d
           JOIN dispatch_items di ON di.dispatch_id = d.id
           JOIN cylinder_sizes cs ON cs.id = di.size_id
           WHERE d.route_id = @routeId AND d.customer_id = customers.id
-            AND lower(cs.name) LIKE '%' || @search || '%'
+            AND instr(lower(cs.name), @search) > 0
         )
         OR EXISTS (
           SELECT 1 FROM returns r
           JOIN return_items ri ON ri.return_id = r.id
           JOIN cylinder_sizes cs ON cs.id = ri.size_id
           WHERE r.route_id = @routeId AND r.customer_id = customers.id
-            AND lower(cs.name) LIKE '%' || @search || '%'
+            AND instr(lower(cs.name), @search) > 0
         )
         OR EXISTS (
           SELECT 1 FROM customer_balances cb
           JOIN cylinder_sizes cs ON cs.id = cb.size_id
           WHERE cb.customer_id = customers.id AND cb.outstanding > 0
-            AND lower(cs.name) LIKE '%' || @search || '%'
+            AND instr(lower(cs.name), @search) > 0
         )
         OR EXISTS (
           SELECT 1 FROM cylinders cy
           WHERE cy.customer_id = customers.id
-            AND lower(cy.serial_number) LIKE '%' || @search || '%'
+            AND instr(lower(cy.serial_number), @search) > 0
         ))
     ORDER BY lower(party_name), id
   `).all({ routeId: input.routeId, search }) as {
