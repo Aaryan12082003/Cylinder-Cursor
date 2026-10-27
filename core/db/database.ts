@@ -229,10 +229,14 @@ function ensureIncrementalSchema(sqlite: Database.Database) {
       PRIMARY KEY (return_item_id, cylinder_id)
     );
   `)
+  if (!customerColumns.has('route_id')) sqlite.exec('ALTER TABLE customers ADD COLUMN route_id INTEGER REFERENCES routes(id)')
+  sqlite.exec('CREATE INDEX IF NOT EXISTS idx_customers_route ON customers(route_id)')
   const dispatchColumns = columnNames(sqlite, 'dispatches')
   if (!dispatchColumns.has('route_id')) sqlite.exec('ALTER TABLE dispatches ADD COLUMN route_id INTEGER REFERENCES routes(id)')
+  if (!dispatchColumns.has('route_name')) sqlite.exec('ALTER TABLE dispatches ADD COLUMN route_name TEXT')
   const returnColumns = columnNames(sqlite, 'returns')
   if (!returnColumns.has('route_id')) sqlite.exec('ALTER TABLE returns ADD COLUMN route_id INTEGER REFERENCES routes(id)')
+  if (!returnColumns.has('route_name')) sqlite.exec('ALTER TABLE returns ADD COLUMN route_name TEXT')
   sqlite.exec('CREATE INDEX IF NOT EXISTS idx_dispatches_route ON dispatches(route_id); CREATE INDEX IF NOT EXISTS idx_returns_route ON returns(route_id)')
 }
 

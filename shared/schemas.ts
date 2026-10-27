@@ -51,6 +51,7 @@ export const customerFieldsSchema = z.object({
   billingAddress: optionalText(300),
   deliveryAddress: optionalText(300),
   city: optionalText(80),
+  routeId: z.number().int().positive().nullable().optional(),
   state: optionalText(80),
   pinCode: pin,
   status: z.enum(['active', 'inactive']).default('active'),

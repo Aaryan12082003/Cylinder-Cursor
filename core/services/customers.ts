@@ -15,8 +15,10 @@ import {
   monthEndSnapshotItems,
   reconciliations,
   returns,
+  routes,
 } from '../db/schema'
 import { BusinessError } from './errors'
+import { requireRoute } from './routes'
 import { clean, likePattern, nullIfEmpty } from './text'
 import {
   actorName,
@@ -68,6 +70,7 @@ export function balancesFor(db: Db, customerIds: number[]): Map<number, Customer
 export function toCustomerRow(
   row: typeof customers.$inferSelect,
   balances: CustomerBalance[],
+  routeName = '',
 ): CustomerRow {
   return {
     id: row.id,
@@ -81,6 +84,8 @@ export function toCustomerRow(
     billingAddress: text(row.billingAddress),
     deliveryAddress: text(row.deliveryAddress),
     city: text(row.city),
+    routeId: row.routeId ?? null,
+    routeName,
     state: text(row.state),
     pinCode: text(row.pinCode),
     status: row.status === 'inactive' ? 'inactive' : 'active',
@@ -140,16 +145,17 @@ export function listCustomers(ctx: AppContext, query: CustomerListQuery): Page<C
   const where = listWhere(query)
   const total = Number(ctx.db.select({ n: sql<number>`count(*)` }).from(customers).where(where).get()?.n ?? 0)
   const found = ctx.db
-    .select()
+    .select({ customer: customers, routeName: routes.name })
     .from(customers)
+    .leftJoin(routes, eq(routes.id, customers.routeId))
     .where(where)
     .orderBy(orderBy(query))
     .limit(query.pageSize)
     .offset((query.page - 1) * query.pageSize)
     .all()
-  const balanceMap = balancesFor(ctx.db, found.map((row) => row.id))
+  const balanceMap = balancesFor(ctx.db, found.map((row) => row.customer.id))
   return {
-    rows: found.map((row) => toCustomerRow(row, balanceMap.get(row.id) ?? [])),
+    rows: found.map((row) => toCustomerRow(row.customer, balanceMap.get(row.customer.id) ?? [], row.routeName ?? '')),
     total,
     page: query.page,
     pageSize: query.pageSize,
@@ -157,14 +163,19 @@ export function listCustomers(ctx: AppContext, query: CustomerListQuery): Page<C
 }
 
 export function getCustomer(ctx: AppContext, id: number): CustomerRow {
-  const row = ctx.db.select().from(customers).where(eq(customers.id, id)).get()
-  if (!row) throw new BusinessError('Customer not found.')
+  const found = ctx.db
+    .select({ customer: customers, routeName: routes.name })
+    .from(customers)
+    .leftJoin(routes, eq(routes.id, customers.routeId))
+    .where(eq(customers.id, id))
+    .get()
+  if (!found) throw new BusinessError('Customer not found.')
   const balances = balancesFor(ctx.db, [id]).get(id) ?? []
-  return toCustomerRow(row, balances)
+  return toCustomerRow(found.customer, balances, found.routeName ?? '')
 }
 
 function customerValues(input: CustomerCreateInput | CustomerUpdateInput, updatedAt: string) {
-  return {
+  const values = {
     partyName: clean(input.partyName, 160),
     contactPerson: nullIfEmpty(input.contactPerson, 120),
     mobile: nullIfEmpty(input.mobile, 15),
@@ -180,17 +191,21 @@ function customerValues(input: CustomerCreateInput | CustomerUpdateInput, update
     alertThresholdDays: input.alertThresholdDays ?? null,
     notes: nullIfEmpty(input.notes, 1000),
     updatedAt,
+    routeId: undefined as number | null | undefined,
   }
+  if ('routeId' in input) values.routeId = input.routeId ?? null
+  return values
 }
 
 export function createCustomer(ctx: AppContext, input: CustomerCreateInput): CustomerRow {
   const id = inTx(ctx, (db) => {
     const { today, createdAt } = stamp(ctx.now())
     const actor = actorName(db)
+    const route = requireRoute(db, input.routeId)
     const code = nextNumber(db, 'customer', today, 'CUST')
     const created = db
       .insert(customers)
-      .values({ code, ...customerValues(input, createdAt), createdAt })
+      .values({ code, ...customerValues(input, createdAt), routeId: route?.id ?? null, createdAt })
       .returning()
       .all()[0]
     if (!created) throw new BusinessError('Customer could not be saved.')
@@ -249,6 +264,7 @@ export function updateCustomer(ctx: AppContext, input: CustomerUpdateInput): Cus
   inTx(ctx, (db) => {
     const current = requireCustomer(db, input.id)
     const { createdAt } = stamp(ctx.now())
+    if ('routeId' in input) requireRoute(db, input.routeId)
     db.update(customers).set(customerValues(input, createdAt)).where(eq(customers.id, input.id)).run()
     writeAudit(db, {
       occurredAt: createdAt,

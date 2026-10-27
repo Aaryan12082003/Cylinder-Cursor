@@ -47,6 +47,7 @@ CREATE TABLE customers (
   billing_address TEXT,
   delivery_address TEXT,
   city TEXT,
+  route_id INTEGER REFERENCES routes(id),
   state TEXT,
   pin_code TEXT,
   status TEXT NOT NULL DEFAULT 'active',
@@ -133,6 +134,7 @@ CREATE TABLE dispatches (
   dispatch_date TEXT NOT NULL,
   customer_id INTEGER NOT NULL REFERENCES customers(id),
   route_id INTEGER REFERENCES routes(id),
+  route_name TEXT,
   vehicle_number TEXT,
   challan_number TEXT,
   driver_name TEXT,
@@ -165,6 +167,7 @@ CREATE TABLE returns (
   return_date TEXT NOT NULL,
   customer_id INTEGER NOT NULL REFERENCES customers(id),
   route_id INTEGER REFERENCES routes(id),
+  route_name TEXT,
   challan_reference TEXT,
   remarks TEXT,
   created_by TEXT NOT NULL,
@@ -316,6 +319,7 @@ CREATE TABLE backup_history (
 
 CREATE INDEX idx_customers_party ON customers(party_name);
 CREATE INDEX idx_customers_mobile ON customers(mobile);
+CREATE INDEX idx_customers_route ON customers(route_id);
 CREATE INDEX idx_customers_status ON customers(status, archived_at);
 CREATE INDEX idx_cylinders_size_status ON cylinders(size_id, status);
 CREATE INDEX idx_cylinders_customer ON cylinders(customer_id);

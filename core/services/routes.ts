@@ -62,7 +62,8 @@ export function deleteRoute(ctx: AppContext, id: number) {
   if (!current) throw new BusinessError('Route not found.')
   const dispatchUse = ctx.sqlite.prepare('SELECT 1 FROM dispatches WHERE route_id = ? LIMIT 1').get(id)
   const returnUse = ctx.sqlite.prepare('SELECT 1 FROM returns WHERE route_id = ? LIMIT 1').get(id)
-  if (dispatchUse || returnUse) throw new BusinessError('This route is used by transaction history. Deactivate it instead of deleting it.')
+  const customerUse = ctx.sqlite.prepare('SELECT 1 FROM customers WHERE route_id = ? LIMIT 1').get(id)
+  if (dispatchUse || returnUse || customerUse) throw new BusinessError('This route is assigned to customers or used by transaction history. Deactivate it instead of deleting it.')
   ctx.db.delete(routes).where(eq(routes.id, id)).run()
   writeAudit(ctx.db, { occurredAt: stamp(ctx.now()).createdAt, actor: actorName(ctx.db), action: 'delete', entityType: 'route', entityId: String(id), summary: `Deleted route ${current.name}.` })
   return { deleted: true as const }
@@ -86,6 +87,26 @@ export function routeDetail(ctx: AppContext, input: { routeId: number; search?: 
     )
     ORDER BY date DESC, id DESC
   `).all(input.routeId, input.routeId) as { id: number; type: 'dispatch' | 'return'; number: string; date: string; customer_name: string; quantity: number; challan: string; reversed: number }[]
+
+  const search = (input.search ?? '').trim().toLowerCase()
+  const customers = ctx.sqlite.prepare(`
+    SELECT id AS customer_id, code AS customer_code, party_name AS customer_name,
+      COALESCE(mobile, '') AS mobile, COALESCE(city, '') AS city, status
+    FROM customers
+    WHERE route_id = ?
+      AND (? = '' OR lower(party_name) LIKE '%' || ? || '%'
+        OR lower(code) LIKE '%' || ? || '%'
+        OR lower(COALESCE(mobile, '')) LIKE '%' || ? || '%'
+        OR lower(COALESCE(city, '')) LIKE '%' || ? || '%')
+    ORDER BY lower(party_name), id
+  `).all(input.routeId, search, search, search, search, search) as {
+    customer_id: number
+    customer_code: string
+    customer_name: string
+    mobile: string
+    city: string
+    status: 'active' | 'inactive'
+  }[]
 
   const customerIds = ctx.sqlite.prepare('SELECT DISTINCT customer_id FROM dispatches WHERE route_id = ?').all(input.routeId) as { customer_id: number }[]
   const holdings: RouteDetail['holdings'] = []
@@ -114,9 +135,13 @@ export function routeDetail(ctx: AppContext, input: { routeId: number; search?: 
         ORDER BY cy.serial_number
       `).all(input.routeId, customerId, row.size_id) as { serial_number: string }[]
       const haystack = `${row.customer_name} ${row.mobile} ${row.size_name} ${serials.map((item) => item.serial_number).join(' ')}`.toLowerCase()
-      if (!pattern || haystack.includes((input.search ?? '').trim().toLowerCase())) holdings.push({ customerId: row.customer_id, customerName: row.customer_name, mobile: row.mobile, sizeName: row.size_name, serialNumbers: serials.map((item) => item.serial_number), quantity: row.quantity })
+      if (!pattern || haystack.includes(search)) holdings.push({ customerId: row.customer_id, customerName: row.customer_name, mobile: row.mobile, sizeName: row.size_name, serialNumbers: serials.map((item) => item.serial_number), quantity: row.quantity })
     }
   }
-  const search = (input.search ?? '').trim().toLowerCase()
-  return { route: { id: route.id, name: route.name, isActive: Boolean(route.isActive) }, holdings, history: history.filter((item) => !search || `${item.number} ${item.customer_name} ${item.challan}`.toLowerCase().includes(search)).map((item) => ({ id: item.id, type: item.type, number: item.number, date: item.date, customerName: item.customer_name, quantity: item.quantity, challan: item.challan, reversed: Boolean(item.reversed) })) }
+  return {
+    route: { id: route.id, name: route.name, isActive: Boolean(route.isActive) },
+    customers: customers.map((item) => ({ customerId: item.customer_id, customerCode: item.customer_code, customerName: item.customer_name, mobile: item.mobile, city: item.city, status: item.status })),
+    holdings,
+    history: history.filter((item) => !search || `${item.number} ${item.customer_name} ${item.challan}`.toLowerCase().includes(search)).map((item) => ({ id: item.id, type: item.type, number: item.number, date: item.date, customerName: item.customer_name, quantity: item.quantity, challan: item.challan, reversed: Boolean(item.reversed) })),
+  }
 }
