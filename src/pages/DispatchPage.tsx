@@ -1,10 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { formatCount, formatDateOnly, todayIso } from '@shared/dates'
-import { Pencil, Plus, Trash2, Truck } from 'lucide-react'
+import { MoreHorizontal, Plus, Trash2, Truck } from 'lucide-react'
 import { useMemo, useState, type Dispatch, type SetStateAction } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
-import { Badge, Button, Card, ConfirmDialog, Dialog, DialogContent, EmptyState, Field, Input, Page, Pagination, Select, Textarea } from '@/components/ui'
+import { Badge, Button, Card, ConfirmDialog, Dialog, DialogContent, EmptyState, Field, Input, Menu, MenuItem, Page, Pagination, Select, Textarea } from '@/components/ui'
 import { api } from '@/lib/api'
 import type { DispatchRow } from '@shared/types'
 
@@ -120,8 +120,13 @@ export function DispatchPage() {
                   <td className="px-4 py-3">{row.totalQuantity}</td>
                   <td className="px-4 py-3">{row.reversedAt ? <Badge tone="warning">Reversed</Badge> : <Badge tone="success">Posted</Badge>}</td>
                   <td className="px-4 py-3 text-right">
-                    <Button size="sm" variant="ghost" onClick={() => api.challan(row.id).catch((error: Error) => toast.error(error.message))}>Challan</Button>
-                    {row.reversedAt ? null : <><Button size="sm" variant="ghost" onClick={() => beginEditDispatch(row, setEditing, setForm, setLines)}> <Pencil className="mr-1 h-3.5 w-3.5" />Edit</Button><Button size="sm" variant="ghost" onClick={() => setReverse(row.id)}>Undo mistake</Button></>}
+                    <Menu trigger={<button className="rounded-lg p-1 text-muted hover:bg-background" aria-label="Dispatch actions"><MoreHorizontal className="h-4 w-4" /></button>}>
+                      <MenuItem onSelect={() => api.challan(row.id).catch((error: Error) => toast.error(error.message))}>Challan</MenuItem>
+                      {row.reversedAt ? null : <>
+                        <MenuItem onSelect={() => beginEditDispatch(row, setEditing, setForm, setLines)}>Edit</MenuItem>
+                        <MenuItem onSelect={() => setReverse(row.id)}>Undo mistake</MenuItem>
+                      </>}
+                    </Menu>
                   </td>
                 </tr>
               ))}
