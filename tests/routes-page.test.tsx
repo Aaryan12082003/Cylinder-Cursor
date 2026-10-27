@@ -71,11 +71,14 @@ describe('RoutesPage', () => {
     fireEvent.click(screen.getByRole('button', { name: /South route/ }))
 
     await waitFor(() => {
+      expect(api.routeDetail).toHaveBeenCalledWith({ routeId: 2, search: '' })
       expect(screen.queryByRole('heading', { name: 'North route' })).toBeNull()
       expect(screen.queryByRole('button', { name: 'Edit' })).toBeNull()
       expect(screen.queryByText('Cylinders currently held')).toBeNull()
     })
 
     resolveSouth({ route: { id: 2, name: 'South route', isActive: true }, holdings: [], history: [] })
+    await screen.findByRole('heading', { name: 'South route' })
+    expect(screen.getByText('No current cylinders are associated with this route.')).toBeTruthy()
   })
 })
