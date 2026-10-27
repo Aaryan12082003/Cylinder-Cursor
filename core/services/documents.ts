@@ -1,5 +1,5 @@
 import { and, desc, eq, inArray, sql } from 'drizzle-orm'
-import type { DispatchInput, ReturnInput } from '@shared/schemas'
+import type { DispatchInput, DispatchUpdateInput, ReturnInput, ReturnUpdateInput } from '@shared/schemas'
 import type { DispatchRow, Page, ReturnRow } from '@shared/types'
 import type { AppContext, Db } from '../db/database'
 import { inTx } from '../db/database'
@@ -64,13 +64,28 @@ function serialsForReturn(db: Db, serialNumbers: string[], sizeId: number, custo
   return found
 }
 
-function hasLaterCustomerMovement(db: Db, customerId: number, sizeId: number, documentDate: string, documentNumber: string) {
-  return db
-    .select({ transactionId: customerLedgerEntries.transactionId, entryDate: customerLedgerEntries.entryDate })
+function hasLaterCustomerMovement(db: Db, customerId: number, sizeId: number, documentDate: string, documentNumber: string, documentCreatedAt?: string) {
+  const entries = db
+    .select({ id: customerLedgerEntries.id, transactionId: customerLedgerEntries.transactionId, entryDate: customerLedgerEntries.entryDate, createdAt: customerLedgerEntries.createdAt })
     .from(customerLedgerEntries)
     .where(and(eq(customerLedgerEntries.customerId, customerId), eq(customerLedgerEntries.sizeId, sizeId)))
     .all()
-    .some((entry) => entry.transactionId !== documentNumber && entry.entryDate >= documentDate)
+  const originalIds = db
+    .select({ id: customerLedgerEntries.id })
+    .from(customerLedgerEntries)
+    .where(and(
+      eq(customerLedgerEntries.customerId, customerId),
+      eq(customerLedgerEntries.sizeId, sizeId),
+      eq(customerLedgerEntries.transactionId, documentNumber),
+    ))
+    .all()
+    .map((entry) => entry.id)
+  if (originalIds.length) {
+    const lastOriginalId = Math.max(...originalIds)
+    const originalDate = entries.find((entry) => entry.transactionId === documentNumber)?.entryDate ?? documentDate
+    return entries.some((entry) => entry.transactionId !== documentNumber && (entry.entryDate > originalDate || (entry.entryDate === originalDate && entry.id > lastOriginalId)))
+  }
+  return entries.some((entry) => entry.transactionId !== documentNumber && (entry.entryDate > documentDate || (entry.entryDate === documentDate && documentCreatedAt !== undefined && entry.createdAt >= documentCreatedAt)))
 }
 
 function normalizeDispatchAvailability(db: Db, sizeId: number, quantity: number, condition: 'filled' | 'empty'): Deltas {
@@ -190,12 +205,11 @@ export function getReturn(ctx: AppContext, id: number) {
   return loadReturn(ctx.db, id)
 }
 
-export function createDispatch(ctx: AppContext, input: DispatchInput): DispatchRow {
-  const id = inTx(ctx, (db) => {
+function createDispatchInDb(ctx: AppContext, db: Db, input: DispatchInput, options: { allowedInactiveRouteId?: number | null } = {}): number {
     assertNotFuture(input.date, ctx.now())
     assertUniqueLines(input.lines)
     const customer = requireCustomer(db, input.customerId, { forDispatch: true })
-    const route = requireRoute(db, input.routeId)
+    const route = requireRoute(db, input.routeId, { active: input.routeId !== options.allowedInactiveRouteId })
     const { createdAt } = stamp(ctx.now())
     const actor = actorName(db)
     const number = nextNumber(db, 'dispatch', input.date, 'DSP')
@@ -269,16 +283,18 @@ export function createDispatch(ctx: AppContext, input: DispatchInput): DispatchR
     })
     assertConsistent(db)
     return created.id
-  })
+}
+
+export function createDispatch(ctx: AppContext, input: DispatchInput): DispatchRow {
+  const id = inTx(ctx, (db) => createDispatchInDb(ctx, db, input))
   return getDispatch(ctx, id)
 }
 
-export function createReturn(ctx: AppContext, input: ReturnInput): ReturnRow {
-  const id = inTx(ctx, (db) => {
+function createReturnInDb(ctx: AppContext, db: Db, input: ReturnInput, options: { allowedInactiveRouteId?: number | null } = {}): number {
     assertNotFuture(input.date, ctx.now())
     assertUniqueLines(input.lines)
     const customer = requireCustomer(db, input.customerId)
-    const route = requireRoute(db, input.routeId)
+    const route = requireRoute(db, input.routeId, { active: input.routeId !== options.allowedInactiveRouteId })
     const { createdAt } = stamp(ctx.now())
     const actor = actorName(db)
     const totals = new Map<number, number>()
@@ -380,19 +396,21 @@ export function createReturn(ctx: AppContext, input: ReturnInput): ReturnRow {
     })
     assertConsistent(db)
     return created.id
-  })
+}
+
+export function createReturn(ctx: AppContext, input: ReturnInput): ReturnRow {
+  const id = inTx(ctx, (db) => createReturnInDb(ctx, db, input))
   const result = getReturn(ctx, id)
   ensureOverdueNotifications(ctx)
   return result
 }
 
-export function reverseDispatch(ctx: AppContext, id: number, reason: string) {
-  inTx(ctx, (db) => {
+function reverseDispatchInDb(ctx: AppContext, db: Db, id: number, reason: string) {
     const document = loadDispatch(db, id)
     if (document.reversedAt) throw new BusinessError('This dispatch has already been reversed.')
     const { today, createdAt } = stamp(ctx.now())
     for (const line of document.lines) {
-      if (!(line.serialNumbers ?? []).length && hasLaterCustomerMovement(db, document.customerId, line.sizeId, document.date, document.number)) {
+      if (!(line.serialNumbers ?? []).length && hasLaterCustomerMovement(db, document.customerId, line.sizeId, document.date, document.number, document.createdAt)) {
         throw new BusinessError('This dispatch cannot be undone safely because a later entry exists for the same customer and cylinder size. Undo the later entry first.')
       }
       const outstanding = getOutstanding(db, document.customerId, line.sizeId)
@@ -470,17 +488,19 @@ export function reverseDispatch(ctx: AppContext, id: number, reason: string) {
       summary: `${document.number} reversed. ${reason}`,
     })
     assertConsistent(db)
-  })
+}
+
+export function reverseDispatch(ctx: AppContext, id: number, reason: string) {
+  inTx(ctx, (db) => reverseDispatchInDb(ctx, db, id, reason))
   return getDispatch(ctx, id)
 }
 
-export function reverseReturn(ctx: AppContext, id: number, reason: string) {
-  inTx(ctx, (db) => {
+function reverseReturnInDb(ctx: AppContext, db: Db, id: number, reason: string) {
     const document = loadReturn(db, id)
     if (document.reversedAt) throw new BusinessError('This return has already been reversed.')
     const { today, createdAt } = stamp(ctx.now())
     for (const line of document.lines) {
-      if (!(line.serialNumbers ?? []).length && hasLaterCustomerMovement(db, document.customerId, line.sizeId, document.date, document.number)) {
+      if (!(line.serialNumbers ?? []).length && hasLaterCustomerMovement(db, document.customerId, line.sizeId, document.date, document.number, document.createdAt)) {
         throw new BusinessError('This return cannot be undone safely because a later entry exists for the same customer and cylinder size. Undo the later entry first.')
       }
       const expectedStatus = line.condition === 'filled' || line.condition === 'empty' ? 'available' : line.condition
@@ -532,8 +552,98 @@ export function reverseReturn(ctx: AppContext, id: number, reason: string) {
       summary: `${document.number} reversed. ${reason}`,
     })
     assertConsistent(db)
-  })
+}
+
+export function reverseReturn(ctx: AppContext, id: number, reason: string) {
+  inTx(ctx, (db) => reverseReturnInDb(ctx, db, id, reason))
   return getReturn(ctx, id)
+}
+
+function assertEditTargetHasNoLaterMovement(db: Db, customerId: number, sizeId: number, original: { date: string; number: string; createdAt: string }) {
+  if (hasLaterCustomerMovement(db, customerId, sizeId, original.date, original.number, original.createdAt)) {
+    throw new BusinessError('This edit cannot be saved safely because a later entry exists for the same customer and cylinder size. Undo the later entry first.')
+  }
+}
+
+function hasReturnReconciliation(db: Db, document: ReturnRow) {
+  for (const line of document.lines) {
+    const entry = db
+      .select()
+      .from(customerLedgerEntries)
+      .where(and(
+        eq(customerLedgerEntries.customerId, document.customerId),
+        eq(customerLedgerEntries.sizeId, line.sizeId),
+        eq(customerLedgerEntries.transactionType, 'return'),
+        eq(customerLedgerEntries.transactionId, document.number),
+      ))
+      .get()
+    if (!entry) continue
+    const previous = db
+      .select()
+      .from(customerLedgerEntries)
+      .where(and(
+        eq(customerLedgerEntries.customerId, document.customerId),
+        eq(customerLedgerEntries.sizeId, line.sizeId),
+        sql`${customerLedgerEntries.id} < ${entry.id}`,
+      ))
+      .orderBy(desc(customerLedgerEntries.id))
+      .get()
+    if (previous?.transactionType === 'reconciliation') return true
+  }
+  return false
+}
+
+export function editDispatch(ctx: AppContext, id: number, input: DispatchUpdateInput): DispatchRow {
+  const replacementId = inTx(ctx, (db) => {
+    const original = loadDispatch(db, id)
+    if (original.reversedAt) throw new BusinessError('Only a posted dispatch can be edited.')
+    reverseDispatchInDb(ctx, db, id, `Edited ${original.number}; replacement posted atomically.`)
+    for (const line of input.lines) {
+      assertEditTargetHasNoLaterMovement(db, input.customerId, line.sizeId, original)
+    }
+    const replacementId = createDispatchInDb(ctx, db, input, { allowedInactiveRouteId: original.routeId })
+    const replacement = loadDispatch(db, replacementId)
+    writeAudit(db, {
+      occurredAt: stamp(ctx.now()).createdAt,
+      actor: actorName(db),
+      action: 'dispatch_edit',
+      entityType: 'dispatch',
+      entityId: replacement.number,
+      summary: `${original.number} was edited and replaced by ${replacement.number}.`,
+      detail: { originalId: original.id, originalNumber: original.number, replacementId: replacement.id, replacementNumber: replacement.number, input },
+    })
+    return replacement.id
+  })
+  return getDispatch(ctx, replacementId)
+}
+
+export function editReturn(ctx: AppContext, id: number, input: ReturnUpdateInput): ReturnRow {
+  const replacementId = inTx(ctx, (db) => {
+    const original = loadReturn(db, id)
+    if (original.reversedAt) throw new BusinessError('Only a posted return can be edited.')
+    if (hasReturnReconciliation(db, original)) {
+      throw new BusinessError('This return cannot be edited because it includes an authorized reconciliation. Keep it in history and post a separate corrected return instead.')
+    }
+    reverseReturnInDb(ctx, db, id, `Edited ${original.number}; replacement posted atomically.`)
+    for (const line of input.lines) {
+      assertEditTargetHasNoLaterMovement(db, input.customerId, line.sizeId, original)
+    }
+    const replacementId = createReturnInDb(ctx, db, input, { allowedInactiveRouteId: original.routeId })
+    const replacement = loadReturn(db, replacementId)
+    writeAudit(db, {
+      occurredAt: stamp(ctx.now()).createdAt,
+      actor: actorName(db),
+      action: 'return_edit',
+      entityType: 'return',
+      entityId: replacement.number,
+      summary: `${original.number} was edited and replaced by ${replacement.number}.`,
+      detail: { originalId: original.id, originalNumber: original.number, replacementId: replacement.id, replacementNumber: replacement.number, input },
+    })
+    return replacement.id
+  })
+  const result = getReturn(ctx, replacementId)
+  ensureOverdueNotifications(ctx)
+  return result
 }
 
 export function listDispatches(ctx: AppContext, query: DocumentQuery): Page<DispatchRow> {

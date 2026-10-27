@@ -51,10 +51,12 @@ export const api = {
   dispatches: (payload: unknown) => call<Page<DispatchRow>>('dispatch:list', payload),
   dispatch: (id: number) => call<DispatchRow>('dispatch:get', { id }),
   createDispatch: (payload: unknown) => call<DispatchRow>('dispatch:create', payload),
+  updateDispatch: (payload: unknown) => call<DispatchRow>('dispatch:update', payload),
   reverseDispatch: (id: number, reason: string) => call<DispatchRow>('dispatch:reverse', { id, reason }),
   challan: (id: number) => call<SavedFile>('dispatch:challan', { id }),
   returns: (payload: unknown) => call<Page<ReturnRow>>('returns:list', payload),
   createReturn: (payload: unknown) => call<ReturnRow>('returns:create', payload),
+  updateReturn: (payload: unknown) => call<ReturnRow>('returns:update', payload),
   reverseReturn: (id: number, reason: string) => call<ReturnRow>('returns:reverse', { id, reason }),
   ledger: (payload: unknown) =>
     call<Page<LedgerRow> & { summary: { dispatched: number; returned: number; adjustment: number; opening: number | null; closing: number | null } }>(

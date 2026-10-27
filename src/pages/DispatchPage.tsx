@@ -1,11 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { formatCount, formatDateOnly, todayIso } from '@shared/dates'
-import { Plus, Trash2, Truck } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { Pencil, Plus, Trash2, Truck } from 'lucide-react'
+import { useMemo, useState, type Dispatch, type SetStateAction } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { Badge, Button, Card, ConfirmDialog, Dialog, DialogContent, EmptyState, Field, Input, Page, Pagination, Select, Textarea } from '@/components/ui'
 import { api } from '@/lib/api'
+import type { DispatchRow } from '@shared/types'
 
 type Line = { sizeId: string; quantity: string; condition: 'filled' | 'empty'; serialNumbers: string }
 
@@ -31,10 +32,12 @@ export function DispatchPage() {
   const [newRouteName, setNewRouteName] = useState('')
   const [lines, setLines] = useState<Line[]>([{ sizeId: '', quantity: '', condition: 'filled', serialNumbers: '' }])
   const [confirm, setConfirm] = useState(false)
+  const [editing, setEditing] = useState<number | null>(null)
   const [reverse, setReverse] = useState<number | null>(null)
   const [reason, setReason] = useState('')
   const sizes = settings.data?.sizes.filter((size) => size.isActive) ?? []
-  const routeOptions = settings.data?.routes.filter((route) => route.isActive && route.name.toLowerCase().includes(routeSearch.trim().toLowerCase())) ?? []
+  const selectedRoute = settings.data?.routes.find((route) => String(route.id) === form.routeId)
+  const routeOptions = settings.data?.routes.filter((route) => (route.isActive || route.id === selectedRoute?.id) && route.name.toLowerCase().includes(routeSearch.trim().toLowerCase())) ?? []
   const total = lines.reduce((sum, line) => sum + (Number(line.quantity) || 0), 0)
   const payload = useMemo(() => ({
     ...form,
@@ -49,6 +52,17 @@ export function DispatchPage() {
       setConfirm(false)
       setLines([{ sizeId: '', quantity: '', condition: 'filled', serialNumbers: '' }])
       setForm((current) => ({ ...current, remarks: '', challanNumber: '', vehicleNumber: '', driverName: '' }))
+      qc.invalidateQueries()
+    },
+    onError: (error: Error) => toast.error(error.message),
+  })
+  const update = useMutation({
+    mutationFn: () => api.updateDispatch({ ...payload, id: editing }),
+    onSuccess: (dispatch) => {
+      toast.success(`${dispatch.number} updated`)
+      setConfirm(false)
+      setEditing(null)
+      resetForm(setForm, setLines, setRouteSearch)
       qc.invalidateQueries()
     },
     onError: (error: Error) => toast.error(error.message),
@@ -80,7 +94,7 @@ export function DispatchPage() {
     <Page title="Dispatch cylinders" subtitle="Send one or more sizes in a single challan. Stock and customer balances update together.">
       <div className="grid gap-4 xl:grid-cols-[420px_1fr]">
         <Card className="p-5">
-          <h2 className="text-base font-semibold">New dispatch</h2>
+          <div className="flex items-center justify-between"><h2 className="text-base font-semibold">{editing ? 'Edit dispatch' : 'New dispatch'}</h2>{editing ? <Button size="sm" variant="ghost" onClick={() => { setEditing(null); resetForm(setForm, setLines, setRouteSearch) }}>Cancel</Button> : null}</div>
           <div className="mt-4 grid gap-3">
             <Field label="Date"><Input type="date" value={form.date} onChange={(event) => setForm({ ...form, date: event.target.value })} /></Field>
             <Field label="Customer">
@@ -100,7 +114,7 @@ export function DispatchPage() {
                 <Button type="button" variant="secondary" onClick={() => { setNewRouteName(routeSearch.trim()); setRouteDialog(true) }}>Add route</Button>
                 {routeOpen ? <div id="dispatch-route-options" role="listbox" className="absolute left-0 top-11 z-20 max-h-52 w-[calc(100%-92px)] overflow-auto rounded-lg border border-border bg-surface p-1 shadow-lg">
                   <button type="button" role="option" aria-selected={!form.routeId} className="block w-full rounded px-3 py-2 text-left text-sm text-muted hover:bg-background" onMouseDown={(event) => event.preventDefault()} onClick={() => { setForm({ ...form, routeId: '' }); setRouteSearch(''); setRouteOpen(false) }}>No route</button>
-                  {routeOptions.map((route) => <button type="button" role="option" aria-selected={form.routeId === String(route.id)} key={route.id} className="block w-full rounded px-3 py-2 text-left text-sm hover:bg-background" onMouseDown={(event) => event.preventDefault()} onClick={() => { setForm({ ...form, routeId: String(route.id) }); setRouteSearch(route.name); setRouteOpen(false) }}>{route.name}</button>)}
+                  {routeOptions.map((route) => <button type="button" role="option" aria-selected={form.routeId === String(route.id)} key={route.id} className="block w-full rounded px-3 py-2 text-left text-sm hover:bg-background" onMouseDown={(event) => event.preventDefault()} onClick={() => { setForm({ ...form, routeId: String(route.id) }); setRouteSearch(route.name); setRouteOpen(false) }}>{route.name}{route.isActive ? '' : ' (inactive)'}</button>)}
                   {routeOptions.length === 0 ? <div className="px-3 py-2 text-sm text-muted">No matching routes</div> : null}
                 </div> : null}
               </div>
@@ -125,7 +139,7 @@ export function DispatchPage() {
             <Field label="Remarks"><Textarea value={form.remarks} onChange={(event) => setForm({ ...form, remarks: event.target.value })} /></Field>
             <div className="flex items-center justify-between">
               <span className="text-sm text-muted">Total {formatCount(total)}</span>
-              <Button onClick={() => setConfirm(true)} disabled={!payload.customerId || payload.lines.length === 0}>Review dispatch</Button>
+              <Button onClick={() => setConfirm(true)} disabled={!payload.customerId || payload.lines.length === 0}>{editing ? 'Review changes' : 'Review dispatch'}</Button>
             </div>
           </div>
         </Card>
@@ -145,7 +159,7 @@ export function DispatchPage() {
                   <td className="px-4 py-3">{row.reversedAt ? <Badge tone="warning">Reversed</Badge> : <Badge tone="success">Posted</Badge>}</td>
                   <td className="px-4 py-3 text-right">
                     <Button size="sm" variant="ghost" onClick={() => api.challan(row.id).catch((error: Error) => toast.error(error.message))}>Challan</Button>
-                    {row.reversedAt ? null : <Button size="sm" variant="ghost" onClick={() => setReverse(row.id)}>Undo mistake</Button>}
+                    {row.reversedAt ? null : <><Button size="sm" variant="ghost" onClick={() => beginEditDispatch(row, setEditing, setForm, setLines, setRouteSearch)}> <Pencil className="mr-1 h-3.5 w-3.5" />Edit</Button><Button size="sm" variant="ghost" onClick={() => setReverse(row.id)}>Undo mistake</Button></>}
                   </td>
                 </tr>
               ))}
@@ -158,10 +172,10 @@ export function DispatchPage() {
       <ConfirmDialog
         open={confirm}
         onOpenChange={setConfirm}
-        title="Confirm dispatch"
-        body={`${customers.data?.rows.find((item) => item.id === payload.customerId)?.partyName ?? 'Customer'} will receive ${total} cylinders. Available stock is checked before anything is saved.`}
-        confirmLabel={create.isPending ? 'Saving…' : 'Dispatch'}
-        onConfirm={() => create.mutate()}
+        title={editing ? 'Confirm dispatch changes' : 'Confirm dispatch'}
+        body={editing ? 'The posted document will be reversed and replaced atomically. This is allowed only while its later movements can still be safely undone.' : `${customers.data?.rows.find((item) => item.id === payload.customerId)?.partyName ?? 'Customer'} will receive ${total} cylinders. Available stock is checked before anything is saved.`}
+        confirmLabel={(create.isPending || update.isPending) ? 'Saving…' : editing ? 'Save changes' : 'Dispatch'}
+        onConfirm={() => editing ? update.mutate() : create.mutate()}
       />
       <Dialog open={reverse !== null} onOpenChange={(open) => { if (!open) setReverse(null) }}>
         <DialogContent title="Undo mistaken dispatch" description="The original document stays in history. This creates a reversal and restores stock only if the customer still holds those cylinders." className="max-w-md">
@@ -181,4 +195,27 @@ export function DispatchPage() {
 
 function updateLine(setLines: (value: Line[] | ((current: Line[]) => Line[])) => void, index: number, patch: Partial<Line>) {
   setLines((current) => current.map((line, item) => (item === index ? { ...line, ...patch } : line)))
+}
+
+function resetForm(
+  setForm: Dispatch<SetStateAction<{ date: string; customerId: string; routeId: string; vehicleNumber: string; challanNumber: string; driverName: string; remarks: string }>>,
+  setLines: Dispatch<SetStateAction<Line[]>>,
+  setRouteSearch: Dispatch<SetStateAction<string>>,
+) {
+  setForm((current) => ({ ...current, date: todayIso(), routeId: '', vehicleNumber: '', challanNumber: '', driverName: '', remarks: '' }))
+  setLines([{ sizeId: '', quantity: '', condition: 'filled', serialNumbers: '' }])
+  setRouteSearch('')
+}
+
+function beginEditDispatch(
+  row: DispatchRow,
+  setEditing: Dispatch<SetStateAction<number | null>>,
+  setForm: Dispatch<SetStateAction<{ date: string; customerId: string; routeId: string; vehicleNumber: string; challanNumber: string; driverName: string; remarks: string }>>,
+  setLines: Dispatch<SetStateAction<Line[]>>,
+  setRouteSearch: Dispatch<SetStateAction<string>>,
+) {
+  setEditing(row.id)
+  setForm({ date: row.date, customerId: String(row.customerId), routeId: row.routeId ? String(row.routeId) : '', vehicleNumber: row.vehicleNumber, challanNumber: row.challanNumber, driverName: row.driverName, remarks: row.remarks })
+  setRouteSearch(row.routeName)
+  setLines(row.lines.map((line) => ({ sizeId: String(line.sizeId), quantity: String(line.quantity), condition: line.condition as Line['condition'], serialNumbers: (line.serialNumbers ?? []).join('\n') })))
 }

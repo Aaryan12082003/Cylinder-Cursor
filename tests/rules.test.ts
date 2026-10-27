@@ -7,7 +7,7 @@ import { closeDatabase, openDatabase, resolveCompatibleDatabasePath } from '../c
 import { BusinessError } from '../core/services/errors'
 import { createBackup, restoreFromFile } from '../core/services/backup'
 import { createCustomer, deleteCustomer, getCustomer, listCustomers } from '../core/services/customers'
-import { createDispatch, createReturn, reverseDispatch } from '../core/services/documents'
+import { createDispatch, createReturn, editDispatch, editReturn, getDispatch, reverseDispatch } from '../core/services/documents'
 import { adjustInventory, listSizeBalances, reconcileCustomer, setOpeningBalances } from '../core/services/inventory'
 import { ensureMonthEnd, getMonthEnd } from '../core/services/monthEnd'
 import { ensureOverdueNotifications, unreadCount } from '../core/services/notifications'
@@ -298,6 +298,76 @@ describe('business rules', () => {
     const after = listSizeBalances(ctx.db).find((item) => item.code === '23L')
     expect(after?.filled).toBe(before?.filled)
     expect(getCustomer(ctx, customer.id).balances.find((item) => item.code === '23L')?.outstanding).toBe(0)
+    expect(consistencyProblems(ctx.db)).toEqual([])
+  })
+
+  it('edits a posted dispatch by reversing and replacing it atomically', () => {
+    const { ctx, sizes, date, customer } = boot()
+    const original = createDispatch(ctx, {
+      date,
+      customerId: customer.id,
+      vehicleNumber: '',
+      challanNumber: 'OLD-1',
+      driverName: '',
+      remarks: '',
+      lines: [{ sizeId: sizes['10L'], quantity: 4, condition: 'filled' }],
+    })
+    const replacement = editDispatch(ctx, original.id, {
+      id: original.id,
+      date,
+      customerId: customer.id,
+      routeId: null,
+      vehicleNumber: 'NEW-1',
+      challanNumber: 'NEW-1',
+      driverName: '',
+      remarks: 'Corrected quantity',
+      lines: [{ sizeId: sizes['10L'], quantity: 3, condition: 'filled' }],
+    })
+    expect(replacement.reversedAt).toBeNull()
+    expect(replacement.lines[0].quantity).toBe(3)
+    expect(getCustomer(ctx, customer.id).balances.find((item) => item.code === '10L')?.outstanding).toBe(3)
+    expect(listSizeBalances(ctx.db).find((item) => item.code === '10L')?.filled).toBe(37)
+    expect(getDispatch(ctx, original.id).reversedAt).toBeTruthy()
+    expect(consistencyProblems(ctx.db)).toEqual([])
+  })
+
+  it('edits a posted return by reversing and replacing it atomically', () => {
+    const { ctx, sizes, date, customer } = boot()
+    const dispatch = createDispatch(ctx, {
+      date,
+      customerId: customer.id,
+      vehicleNumber: '',
+      challanNumber: '',
+      driverName: '',
+      remarks: '',
+      lines: [{ sizeId: sizes['23L'], quantity: 5, condition: 'filled' }],
+    })
+    const original = createReturn(ctx, {
+      date,
+      customerId: customer.id,
+      routeId: null,
+      challanReference: '',
+      remarks: '',
+      lines: [{ sizeId: sizes['23L'], quantity: 2, condition: 'empty' }],
+      allowReconciliation: false,
+      reconciliationReason: '',
+    })
+    const replacement = editReturn(ctx, original.id, {
+      id: original.id,
+      date,
+      customerId: customer.id,
+      routeId: null,
+      challanReference: 'CORRECTED-1',
+      remarks: 'Corrected quantity',
+      lines: [{ sizeId: sizes['23L'], quantity: 3, condition: 'empty' }],
+      allowReconciliation: false,
+      reconciliationReason: '',
+    })
+    expect(replacement.reversedAt).toBeNull()
+    expect(replacement.lines[0].quantity).toBe(3)
+    expect(getCustomer(ctx, customer.id).balances.find((item) => item.code === '23L')?.outstanding).toBe(2)
+    expect(getDispatch(ctx, dispatch.id).reversedAt).toBeNull()
+    expect(getCustomer(ctx, customer.id).balances.find((item) => item.code === '23L')?.outstanding).toBe(2)
     expect(consistencyProblems(ctx.db)).toEqual([])
   })
 

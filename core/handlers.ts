@@ -10,6 +10,7 @@ import {
   customerUpdateSchema,
   deleteAllDataSchema,
   dispatchSchema,
+  dispatchUpdateSchema,
   documentListSchema,
   idSchema,
   ledgerListSchema,
@@ -22,6 +23,7 @@ import {
   reportFilterSchema,
   restoreSchema,
   returnSchema,
+  returnUpdateSchema,
   reverseSchema,
   searchSchema,
   serialListSchema,
@@ -40,7 +42,7 @@ import { createBackup, integrityCheck, listBackups, restoreFromFile, setBackupDi
 import { consistencyProblems } from './services/stock'
 import { createCustomer, deleteCustomer, getCustomer, listCustomers, setCustomerArchived, updateCustomer } from './services/customers'
 import { loadDemoData, purgeDemoData } from './services/demo'
-import { createDispatch, createReturn, getDispatch, getReturn, listDispatches, listReturns, reverseDispatch, reverseReturn } from './services/documents'
+import { createDispatch, createReturn, editDispatch, editReturn, getDispatch, getReturn, listDispatches, listReturns, reverseDispatch, reverseReturn } from './services/documents'
 import { challanToPdf, reportToExcel, reportToPdf } from './services/exports'
 import { adjustInventory, inventoryOverview, listMovements, reconcileCustomer, setOpeningBalances } from './services/inventory'
 import { listLedger, listOutstanding } from './services/ledger'
@@ -89,6 +91,10 @@ export function buildHandlers(ctx: AppContext, host: Host): Record<Channel, (pay
     'dispatch:list': (payload) => listDispatches(ctx, parse(documentListSchema, payload)),
     'dispatch:get': (payload) => getDispatch(ctx, parse(idSchema, payload).id),
     'dispatch:create': (payload) => createDispatch(ctx, parse(dispatchSchema, payload)),
+    'dispatch:update': (payload) => {
+      const input = parse(dispatchUpdateSchema, payload)
+      return editDispatch(ctx, input.id, input)
+    },
     'dispatch:reverse': (payload) => {
       const input = parse(reverseSchema, payload)
       return reverseDispatch(ctx, input.id, input.reason)
@@ -102,6 +108,10 @@ export function buildHandlers(ctx: AppContext, host: Host): Record<Channel, (pay
     'returns:list': (payload) => listReturns(ctx, parse(documentListSchema, payload)),
     'returns:get': (payload) => getReturn(ctx, parse(idSchema, payload).id),
     'returns:create': (payload) => createReturn(ctx, parse(returnSchema, payload)),
+    'returns:update': (payload) => {
+      const input = parse(returnUpdateSchema, payload)
+      return editReturn(ctx, input.id, input)
+    },
     'returns:reverse': (payload) => {
       const input = parse(reverseSchema, payload)
       return reverseReturn(ctx, input.id, input.reason)

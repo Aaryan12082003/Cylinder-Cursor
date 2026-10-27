@@ -1,11 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { formatCount, formatDateOnly, todayIso } from '@shared/dates'
-import { Plus, Trash2, Undo2 } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { Pencil, Plus, Trash2, Undo2 } from 'lucide-react'
+import { useMemo, useState, type Dispatch, type SetStateAction } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { Badge, Button, Card, ConfirmDialog, Dialog, DialogContent, EmptyState, Field, Input, Page, Pagination, Select, Textarea } from '@/components/ui'
 import { api } from '@/lib/api'
+import type { ReturnRow } from '@shared/types'
 
 type Line = { sizeId: string; quantity: string; condition: 'filled' | 'empty' | 'damaged' | 'lost' | 'maintenance'; serialNumbers: string }
 
@@ -19,6 +20,7 @@ export function ReturnsPage() {
   const [form, setForm] = useState({ date: todayIso(), customerId: params.get('customer') ?? '', routeId: '', challanReference: '', remarks: '', allowReconciliation: false, reconciliationReason: '' })
   const [lines, setLines] = useState<Line[]>([{ sizeId: '', quantity: '', condition: 'empty', serialNumbers: '' }])
   const [confirm, setConfirm] = useState(false)
+  const [editing, setEditing] = useState<number | null>(null)
   const [reverse, setReverse] = useState<number | null>(null)
   const [reason, setReason] = useState('')
   const sizes = settings.data?.sizes.filter((size) => size.isActive) ?? []
@@ -38,6 +40,17 @@ export function ReturnsPage() {
     },
     onError: (error: Error) => toast.error(error.message),
   })
+  const update = useMutation({
+    mutationFn: () => api.updateReturn({ ...payload, id: editing }),
+    onSuccess: (entry) => {
+      toast.success(`${entry.number} updated`)
+      setConfirm(false)
+      setEditing(null)
+      resetReturnForm(setForm, setLines)
+      qc.invalidateQueries()
+    },
+    onError: (error: Error) => toast.error(error.message),
+  })
   const undo = useMutation({
     mutationFn: () => api.reverseReturn(reverse!, reason),
     onSuccess: () => {
@@ -51,7 +64,7 @@ export function ReturnsPage() {
     <Page title="Receive cylinders" subtitle="Partial and mixed returns are supported. A customer cannot return more than their outstanding balance unless you authorize a reconciliation.">
       <div className="grid gap-4 xl:grid-cols-[420px_1fr]">
         <Card className="p-5">
-          <h2 className="text-base font-semibold">New return</h2>
+          <div className="flex items-center justify-between"><h2 className="text-base font-semibold">{editing ? 'Edit return' : 'New return'}</h2>{editing ? <Button size="sm" variant="ghost" onClick={() => { setEditing(null); resetReturnForm(setForm, setLines) }}>Cancel</Button> : null}</div>
           <div className="mt-4 grid gap-3">
             <Field label="Date"><Input type="date" value={form.date} onChange={(event) => setForm({ ...form, date: event.target.value })} /></Field>
             <Field label="Customer">
@@ -63,7 +76,7 @@ export function ReturnsPage() {
             <Field label="Route (optional)">
               <Select value={form.routeId} onChange={(event) => setForm({ ...form, routeId: event.target.value })}>
                 <option value="">Choose route</option>
-                {settings.data?.routes.filter((route) => route.isActive).map((route) => <option key={route.id} value={route.id}>{route.name}</option>)}
+                {settings.data?.routes.filter((route) => route.isActive || String(route.id) === form.routeId).map((route) => <option key={route.id} value={route.id}>{route.name}{route.isActive ? '' : ' (inactive)'}</option>)}
               </Select>
             </Field>
             {lines.map((line, index) => (
@@ -87,7 +100,7 @@ export function ReturnsPage() {
             {form.allowReconciliation ? <Field label="Reconciliation reason"><Textarea value={form.reconciliationReason} onChange={(event) => setForm({ ...form, reconciliationReason: event.target.value })} /></Field> : null}
             <div className="flex items-center justify-between">
               <span className="text-sm text-muted">Total {formatCount(total)}</span>
-              <Button onClick={() => setConfirm(true)} disabled={!payload.customerId || payload.lines.length === 0}>Review return</Button>
+              <Button onClick={() => setConfirm(true)} disabled={!payload.customerId || payload.lines.length === 0}>{editing ? 'Review changes' : 'Review return'}</Button>
             </div>
           </div>
         </Card>
@@ -103,7 +116,7 @@ export function ReturnsPage() {
                   <td className="px-4 py-3">{row.partyName}{row.routeName ? <div className="text-xs text-muted">{row.routeName}</div> : null}</td>
                   <td className="px-4 py-3">{row.totalQuantity}</td>
                   <td className="px-4 py-3">{row.reversedAt ? <Badge tone="warning">Reversed</Badge> : <Badge tone="success">Posted</Badge>}</td>
-                  <td className="px-4 py-3 text-right">{row.reversedAt ? null : <Button size="sm" variant="ghost" onClick={() => setReverse(row.id)}>Undo mistake</Button>}</td>
+                  <td className="px-4 py-3 text-right">{row.reversedAt ? null : <><Button size="sm" variant="ghost" onClick={() => beginEditReturn(row, setEditing, setForm, setLines)}><Pencil className="mr-1 h-3.5 w-3.5" />Edit</Button><Button size="sm" variant="ghost" onClick={() => setReverse(row.id)}>Undo mistake</Button></>}</td>
                 </tr>
               ))}
             </tbody>
@@ -112,7 +125,7 @@ export function ReturnsPage() {
           <Pagination page={page} pageSize={8} total={history.data?.total ?? 0} onPage={setPage} />
         </Card>
       </div>
-      <ConfirmDialog open={confirm} onOpenChange={setConfirm} title="Confirm return" body={`Receive ${total} cylinders and update the customer balance.`} confirmLabel="Receive" onConfirm={() => create.mutate()} />
+      <ConfirmDialog open={confirm} onOpenChange={setConfirm} title={editing ? 'Confirm return changes' : 'Confirm return'} body={editing ? 'The posted document will be reversed and replaced atomically. This is allowed only while its later movements can still be safely undone.' : `Receive ${total} cylinders and update the customer balance.`} confirmLabel={(create.isPending || update.isPending) ? 'Saving…' : editing ? 'Save changes' : 'Receive'} onConfirm={() => editing ? update.mutate() : create.mutate()} />
       <Dialog open={reverse !== null} onOpenChange={(open) => { if (!open) setReverse(null) }}>
         <DialogContent title="Undo mistaken return" description="The original document stays in history. This creates a reversal and puts the cylinders back with the customer if that stock condition still has them." className="max-w-md">
           <Field label="Reason"><Textarea value={reason} onChange={(event) => setReason(event.target.value)} /></Field>
@@ -121,4 +134,23 @@ export function ReturnsPage() {
       </Dialog>
     </Page>
   )
+}
+
+function resetReturnForm(
+  setForm: Dispatch<SetStateAction<{ date: string; customerId: string; routeId: string; challanReference: string; remarks: string; allowReconciliation: boolean; reconciliationReason: string }>>,
+  setLines: Dispatch<SetStateAction<Line[]>>,
+) {
+  setForm((current) => ({ ...current, date: todayIso(), routeId: '', challanReference: '', remarks: '', allowReconciliation: false, reconciliationReason: '' }))
+  setLines([{ sizeId: '', quantity: '', condition: 'empty', serialNumbers: '' }])
+}
+
+function beginEditReturn(
+  row: ReturnRow,
+  setEditing: Dispatch<SetStateAction<number | null>>,
+  setForm: Dispatch<SetStateAction<{ date: string; customerId: string; routeId: string; challanReference: string; remarks: string; allowReconciliation: boolean; reconciliationReason: string }>>,
+  setLines: Dispatch<SetStateAction<Line[]>>,
+) {
+  setEditing(row.id)
+  setForm({ date: row.date, customerId: String(row.customerId), routeId: row.routeId ? String(row.routeId) : '', challanReference: row.challanReference, remarks: row.remarks, allowReconciliation: false, reconciliationReason: '' })
+  setLines(row.lines.map((line) => ({ sizeId: String(line.sizeId), quantity: String(line.quantity), condition: line.condition as Line['condition'], serialNumbers: (line.serialNumbers ?? []).join('\n') })))
 }

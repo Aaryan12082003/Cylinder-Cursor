@@ -153,6 +153,10 @@ export const dispatchSchema = z.object({
   lines: z.array(dispatchLineSchema).min(1, 'Add at least one cylinder line').max(20),
 })
 
+export const dispatchUpdateSchema = dispatchSchema.extend({
+  id: z.number().int().positive(),
+})
+
 export const returnLineSchema = z.object({
   sizeId: z.number().int().positive(),
   quantity: z.number().int().positive().max(1_000_000),
@@ -180,6 +184,10 @@ export const returnSchema = z.object({
   lines: z.array(returnLineSchema).min(1, 'Add at least one cylinder line').max(20),
   allowReconciliation: z.boolean().optional().default(false),
   reconciliationReason: optionalText(500),
+})
+
+export const returnUpdateSchema = returnSchema.extend({
+  id: z.number().int().positive(),
 })
 
 export const routeCreateSchema = z.object({ name: z.string().trim().min(2).max(80) })
@@ -287,9 +295,11 @@ export type CustomerUpdateInput = z.infer<typeof customerUpdateSchema>
 export type DispatchInput = Omit<z.input<typeof dispatchSchema>, 'lines'> & {
   lines: (Omit<z.input<typeof dispatchLineSchema>, 'serialNumbers'> & { serialNumbers?: string[] })[]
 }
+export type DispatchUpdateInput = z.input<typeof dispatchUpdateSchema>
 export type ReturnInput = Omit<z.input<typeof returnSchema>, 'lines'> & {
   lines: (Omit<z.input<typeof returnLineSchema>, 'serialNumbers'> & { serialNumbers?: string[] })[]
 }
+export type ReturnUpdateInput = z.input<typeof returnUpdateSchema>
 export type AdjustmentInput = z.infer<typeof adjustmentSchema>
 export type ReconciliationInput = z.infer<typeof reconciliationSchema>
 export type OpeningStockInput = z.infer<typeof openingStockSchema>
