@@ -254,6 +254,12 @@ function ensureIncrementalSchema(sqlite: Database.Database) {
   if (!hasRouteHistoryBackfill) {
     const backfill = sqlite.transaction(() => {
       const updatedAt = new Date().toISOString()
+      // Claim the migration inside the write transaction. If another app
+      // process committed the marker while this transaction was waiting for
+      // the database lock, INSERT OR IGNORE reports no change and this runner
+      // must skip the repair instead of racing into a duplicate-key failure.
+      const marker = sqlite.prepare('INSERT OR IGNORE INTO schema_migrations (name, applied_at) VALUES (?, ?)').run(routeHistoryBackfill, updatedAt)
+      if (marker.changes === 0) return
       // Recover an assignment from non-reversed historical snapshots only when
       // every valid snapshot points to one distinct route. Invalid route IDs are
       // ignored; conflicting valid routes deliberately remain unassigned.
@@ -314,7 +320,6 @@ function ensureIncrementalSchema(sqlite: Database.Database) {
             ) = 1
         `)
         .run(updatedAt)
-      sqlite.prepare('INSERT INTO schema_migrations (name, applied_at) VALUES (?, ?)').run(routeHistoryBackfill, updatedAt)
     })
     backfill()
   }
