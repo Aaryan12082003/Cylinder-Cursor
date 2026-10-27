@@ -1,5 +1,6 @@
 appId: com.cylinderflow.desktop
 productName: CylinderFlow
+executableName: CylinderFlow
 copyright: Copyright © 2026 CylinderFlow
 directories:
   output: release
