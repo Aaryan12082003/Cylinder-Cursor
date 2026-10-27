@@ -305,12 +305,20 @@ function ensureIncrementalSchema(sqlite: Database.Database) {
             AND customers.city IS NOT NULL
             AND length(trim(customers.city)) > 0
             AND NOT EXISTS (
-              SELECT 1 FROM dispatches d
-              WHERE d.customer_id = customers.id AND d.reversed_at IS NULL
+              SELECT 1
+              FROM dispatches d
+              INNER JOIN routes historical_route ON historical_route.id = d.route_id
+              WHERE d.customer_id = customers.id
+                AND d.route_id IS NOT NULL
+                AND d.reversed_at IS NULL
             )
             AND NOT EXISTS (
-              SELECT 1 FROM returns rdoc
-              WHERE rdoc.customer_id = customers.id AND rdoc.reversed_at IS NULL
+              SELECT 1
+              FROM returns rdoc
+              INNER JOIN routes historical_route ON historical_route.id = rdoc.route_id
+              WHERE rdoc.customer_id = customers.id
+                AND rdoc.route_id IS NOT NULL
+                AND rdoc.reversed_at IS NULL
             )
             AND (
               SELECT count(*)

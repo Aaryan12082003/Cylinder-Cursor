@@ -138,6 +138,24 @@ describe('customer route assignment', () => {
     expect(reopenedAgain.sqlite.prepare('SELECT count(*) AS count FROM schema_migrations WHERE name = ?').get('002_customer_route_history_backfill')).toEqual({ count: 1 })
   })
 
+  it('allows city fallback when a legacy non-reversed document has no route snapshot', () => {
+    const env = tempContext()
+    const customer = createCustomer(env.ctx, fields({ city: 'Route-less City' }))
+    const timestamp = new Date().toISOString()
+    env.ctx.sqlite.prepare('INSERT INTO routes (name, is_active, created_at, updated_at) VALUES (?, 1, ?, ?)').run('Route-less City', timestamp, timestamp)
+    env.ctx.sqlite.prepare(`
+      INSERT INTO dispatches (number, dispatch_date, customer_id, route_id, route_name, created_by, created_at)
+      VALUES (?, ?, ?, NULL, NULL, ?, ?)
+    `).run('ROUTELESS-DSP-1', '2026-10-26', customer.id, 'Legacy migration', timestamp)
+    env.ctx.sqlite.prepare('DELETE FROM schema_migrations WHERE name = ?').run('002_customer_route_history_backfill')
+    const path = env.ctx.path
+    env.close()
+    const reopened = openDatabase(path)
+    open.push({ close: () => closeDatabase(reopened) })
+
+    expect(getCustomer(reopened, customer.id).routeName).toBe('Route-less City')
+  })
+
   it('leaves a customer unassigned when non-reversed snapshots conflict across routes', () => {
     const env = tempContext()
     // The city intentionally matches one route name; the historical conflict
