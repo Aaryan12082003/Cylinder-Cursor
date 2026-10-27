@@ -79,7 +79,10 @@ describe('customer route assignment', () => {
     expect(() => createCustomer(env.ctx, fields({ routeId: route.id }))).toThrow('inactive')
 
     const active = createRoute(env.ctx, { name: 'Active route' })
-    createCustomer(env.ctx, fields({ routeId: active.id }))
+    const assigned = createCustomer(env.ctx, fields({ routeId: active.id }))
+    updateRoute(env.ctx, { id: active.id, name: active.name, isActive: false })
+    const saved = updateCustomer(env.ctx, { id: assigned.id, ...fields({ partyName: 'Updated assigned customer', routeId: active.id }) })
+    expect(saved.routeId).toBe(active.id)
     expect(() => deleteRoute(env.ctx, active.id)).toThrow('assigned')
   })
 })

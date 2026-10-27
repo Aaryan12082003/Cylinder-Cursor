@@ -264,7 +264,10 @@ export function updateCustomer(ctx: AppContext, input: CustomerUpdateInput): Cus
   inTx(ctx, (db) => {
     const current = requireCustomer(db, input.id)
     const { createdAt } = stamp(ctx.now())
-    if ('routeId' in input) requireRoute(db, input.routeId)
+    // Keep an existing inactive assignment stable when editing other customer
+    // fields. A user may save the form with the same inactive route selected;
+    // only a new assignment must point to an active route.
+    if ('routeId' in input && input.routeId !== undefined && input.routeId !== current.routeId) requireRoute(db, input.routeId)
     db.update(customers).set(customerValues(input, createdAt)).where(eq(customers.id, input.id)).run()
     writeAudit(db, {
       occurredAt: createdAt,
