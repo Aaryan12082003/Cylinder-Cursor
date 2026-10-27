@@ -16,6 +16,31 @@ function assertUniqueName(ctx: AppContext, name: string, id?: number) {
   if (duplicate) throw new BusinessError('A route with this name already exists.')
 }
 
+/**
+ * Attach only unassigned customers whose city identifies this active route.
+ * The uniqueness check protects legacy databases that may contain case
+ * variants of the same route name; in that situation guessing would be less
+ * safe than leaving the customer unassigned for an explicit user choice.
+ */
+export function backfillCustomersForRoute(ctx: AppContext, route: typeof routes.$inferSelect, updatedAt = stamp(ctx.now()).createdAt) {
+  if (!route.isActive) return 0
+  const matches = ctx.sqlite
+    .prepare('SELECT id FROM routes WHERE is_active = 1 AND lower(trim(name)) = lower(trim(?))')
+    .all(route.name) as { id: number }[]
+  if (matches.length !== 1 || matches[0]?.id !== route.id) return 0
+  const result = ctx.sqlite
+    .prepare(`
+      UPDATE customers
+      SET route_id = ?, updated_at = ?
+      WHERE route_id IS NULL
+        AND city IS NOT NULL
+        AND length(trim(city)) > 0
+        AND lower(trim(city)) = lower(trim(?))
+    `)
+    .run(route.id, updatedAt, route.name)
+  return result.changes
+}
+
 export function listRoutes(ctx: AppContext) {
   return ctx.db.select().from(routes).orderBy(asc(routes.name)).all().map(map)
 }
@@ -36,6 +61,7 @@ export function createRoute(ctx: AppContext, input: { name: string }) {
   try {
     const row = ctx.db.insert(routes).values({ name, isActive: 1, createdAt: now, updatedAt: now }).returning().all()[0]
     if (!row) throw new BusinessError('Route could not be created.')
+    backfillCustomersForRoute(ctx, row, now)
     writeAudit(ctx.db, { occurredAt: now, actor: actorName(ctx.db), action: 'create', entityType: 'route', entityId: String(row.id), summary: `Created route ${row.name}.` })
     return map(row)
   } catch (error) {
@@ -50,8 +76,10 @@ export function updateRoute(ctx: AppContext, input: { id: number; name: string; 
   const name = input.name.trim().replace(/\s+/g, ' ')
   if (name.length < 2 || name.length > 80) throw new BusinessError('Route name must be between 2 and 80 characters.')
   assertUniqueName(ctx, name, input.id)
-  const updated = ctx.db.update(routes).set({ name, isActive: input.isActive ? 1 : 0, updatedAt: stamp(ctx.now()).createdAt }).where(eq(routes.id, input.id)).returning().all()[0]
+  const updatedAt = stamp(ctx.now()).createdAt
+  const updated = ctx.db.update(routes).set({ name, isActive: input.isActive ? 1 : 0, updatedAt }).where(eq(routes.id, input.id)).returning().all()[0]
   if (!updated) throw new BusinessError('Route could not be updated.')
+  backfillCustomersForRoute(ctx, updated, updatedAt)
   const action = current.name !== updated.name ? 'update' : current.isActive !== updated.isActive ? (input.isActive ? 'activate' : 'deactivate') : 'update'
   writeAudit(ctx.db, { occurredAt: updated.updatedAt, actor: actorName(ctx.db), action, entityType: 'route', entityId: String(updated.id), summary: `${action === 'update' ? 'Updated' : action === 'activate' ? 'Activated' : 'Deactivated'} route ${updated.name}.` })
   return map(updated)

@@ -55,10 +55,40 @@ describe('customer route assignment', () => {
     expect(explicitlyChanged.routeId).toBe(legacyRoute.id)
   })
 
+  it('backfills unassigned customers when a route is created, renamed, or activated', () => {
+    let now = new Date('2026-10-27T10:00:00.000Z')
+    const env = tempContext(() => now)
+    open.push(env)
+    const unassigned = createCustomer(env.ctx, fields({ city: 'Jaipur' }))
+    const explicitRoute = createRoute(env.ctx, { name: 'Explicit route' })
+    const explicitlyAssigned = createCustomer(env.ctx, fields({ city: 'Jaipur', routeId: explicitRoute.id, mobile: '9845011123' }))
+
+    now = new Date('2026-10-27T10:01:00.000Z')
+    const created = createRoute(env.ctx, { name: ' jaIPUR ' })
+    expect(getCustomer(env.ctx, unassigned.id).routeId).toBe(created.id)
+    expect(getCustomer(env.ctx, unassigned.id).updatedAt).toBe(now.toISOString())
+    expect(getCustomer(env.ctx, explicitlyAssigned.id).routeId).toBe(explicitRoute.id)
+
+    const dormant = createRoute(env.ctx, { name: 'Kota' })
+    updateRoute(env.ctx, { id: dormant.id, name: dormant.name, isActive: false })
+    const waiting = createCustomer(env.ctx, fields({ city: ' kota ', mobile: '9845011124' }))
+    expect(waiting.routeId).toBeNull()
+    now = new Date('2026-10-27T10:02:00.000Z')
+    updateRoute(env.ctx, { id: dormant.id, name: dormant.name, isActive: true })
+    expect(getCustomer(env.ctx, waiting.id).routeId).toBe(dormant.id)
+
+    const renameTarget = createCustomer(env.ctx, fields({ city: 'Udaipur', mobile: '9845011125' }))
+    const renamed = createRoute(env.ctx, { name: 'Old Udaipur route' })
+    updateRoute(env.ctx, { id: renamed.id, name: ' udaipur ', isActive: true })
+    expect(getCustomer(env.ctx, renameTarget.id).routeId).toBe(renamed.id)
+  })
+
   it('backfills an unassigned legacy customer only when its city has one active route match', () => {
     const env = tempContext()
     const customer = createCustomer(env.ctx, fields({ city: 'Rajkot' }))
-    const route = createRoute(env.ctx, { name: 'rajkot' })
+    const timestamp = new Date().toISOString()
+    env.ctx.sqlite.prepare('INSERT INTO routes (name, is_active, created_at, updated_at) VALUES (?, 1, ?, ?)').run('rajkot', timestamp, timestamp)
+    const route = env.ctx.sqlite.prepare('SELECT id FROM routes WHERE name = ?').get('rajkot') as { id: number }
     const path = env.ctx.path
     env.close()
     const reopened = openDatabase(path)
