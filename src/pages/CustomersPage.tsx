@@ -32,6 +32,7 @@ const emptyCustomer: CustomerCreateInput = {
 }
 
 type CustomerRouteFields = {
+  routeId?: number | null
   routeName?: string
 }
 
@@ -170,6 +171,7 @@ export function CustomersPage() {
         open={creating || Boolean(editing)}
         customer={editing}
         sizes={sizes.data?.sizes ?? []}
+        routes={sizes.data?.routes ?? []}
         onOpenChange={(open) => {
           if (!open) {
             setCreating(false)
@@ -202,19 +204,21 @@ function Status({ row }: { row: CustomerRow }) {
   return <Badge tone="success">Active</Badge>
 }
 
-function CustomerForm({ open, customer, sizes, onOpenChange }: { open: boolean; customer: CustomerRow | null; sizes: { id: number; code: string; name: string; isActive: boolean }[]; onOpenChange: (open: boolean) => void }) {
+function CustomerForm({ open, customer, sizes, routes, onOpenChange }: { open: boolean; customer: CustomerRow | null; sizes: { id: number; code: string; name: string; isActive: boolean }[]; routes: { id: number; name: string; isActive: boolean }[]; onOpenChange: (open: boolean) => void }) {
   const qc = useQueryClient()
   const form = useForm<CustomerCreateInput>({
     resolver: zodResolver(customerCreateSchema),
     defaultValues: emptyCustomer,
   })
+  const [routeId, setRouteId] = useState<number | null>(null)
   useEffect(() => {
     if (!open) return
     form.reset(customer ? { ...emptyCustomer, ...customer, openingBalances: [] } : emptyCustomer)
+    setRouteId(customer?.routeId ?? null)
   }, [open, customer, form])
   const [openings, setOpenings] = useState<Record<number, string>>({})
   const save = useMutation({
-    mutationFn: (values: CustomerCreateInput) => customer ? api.updateCustomer({ ...values, id: customer.id }) : api.createCustomer({
+    mutationFn: (values: CustomerCreateInput) => customer ? api.updateCustomer({ ...values, id: customer.id, routeId }) : api.createCustomer({
       ...values,
       openingBalances: Object.entries(openings).filter(([, quantity]) => Number(quantity) > 0).map(([sizeId, quantity]) => ({ sizeId: Number(sizeId), quantity: Number(quantity) })),
     }),
@@ -246,10 +250,20 @@ function CustomerForm({ open, customer, sizes, onOpenChange }: { open: boolean; 
               <option value="inactive">Inactive</option>
             </Select>
           </Field>
-          <Field label="Resolved route">
-            <Input value={customer ? (customer as CustomerRow & CustomerRouteFields).routeName || 'No route assigned' : 'Resolved from city after saving'} readOnly />
-            <p className="mt-1 text-xs text-muted">Routes are assigned automatically from the customer city.</p>
-          </Field>
+          {customer ? (
+            <Field label="Assigned route">
+              <Select value={routeId == null ? '' : String(routeId)} onChange={(event) => setRouteId(event.target.value ? Number(event.target.value) : null)}>
+                <option value="">No route</option>
+                {routes.filter((route) => route.isActive || route.id === routeId).map((route) => <option key={route.id} value={route.id}>{route.name}{route.isActive ? '' : ' (inactive)'}</option>)}
+              </Select>
+              <p className="mt-1 text-xs text-muted">Change the route assignment for this customer. New customers resolve from city automatically.</p>
+            </Field>
+          ) : (
+            <Field label="Resolved route">
+              <Input value="Resolved from city after saving" readOnly />
+              <p className="mt-1 text-xs text-muted">Routes are assigned automatically from the customer city.</p>
+            </Field>
+          )}
           <Field label="Overdue alert period">
             <Select
               value={form.watch('alertThresholdDays') == null ? '' : String(form.watch('alertThresholdDays'))}
