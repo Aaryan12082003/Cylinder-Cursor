@@ -116,14 +116,22 @@ export function routeDetail(ctx: AppContext, input: { routeId: number; search?: 
   const holdings: RouteDetail['holdings'] = []
   for (const { customer_id: customerId } of customerIds) {
     const rows = ctx.sqlite.prepare(`
-      SELECT c.id AS customer_id, c.party_name AS customer_name, COALESCE(c.mobile, '') AS mobile,
-        cs.name AS size_name, cb.size_id AS size_id, cb.outstanding AS quantity
+      SELECT c.id AS customer_id, c.code AS customer_code, c.party_name AS customer_name,
+        COALESCE(c.mobile, '') AS mobile, COALESCE(c.city, '') AS city,
+        cs.name AS size_name, cb.size_id AS size_id, cb.outstanding AS quantity,
+        COALESCE((SELECT group_concat(challan, ' ') FROM (
+          SELECT COALESCE(d.challan_number, '') AS challan
+          FROM dispatches d WHERE d.route_id = ? AND d.customer_id = c.id
+          UNION ALL
+          SELECT COALESCE(r.challan_reference, '') AS challan
+          FROM returns r WHERE r.route_id = ? AND r.customer_id = c.id
+        ) WHERE challan <> ''), '') AS challans
       FROM customers c
       JOIN customer_balances cb ON cb.customer_id = c.id
       JOIN cylinder_sizes cs ON cs.id = cb.size_id
       WHERE c.id = ? AND cb.outstanding > 0
       ORDER BY cs.sort_order, cs.id
-    `).all(customerId) as { customer_id: number; customer_name: string; mobile: string; size_name: string; size_id: number; quantity: number }[]
+    `).all(input.routeId, input.routeId, customerId) as { customer_id: number; customer_code: string; customer_name: string; mobile: string; city: string; size_name: string; size_id: number; quantity: number; challans: string }[]
     for (const row of rows) {
       const serials = ctx.sqlite.prepare(`
         SELECT DISTINCT cy.serial_number
@@ -131,7 +139,7 @@ export function routeDetail(ctx: AppContext, input: { routeId: number; search?: 
         WHERE cy.customer_id = ? AND cy.size_id = ? AND cy.status = 'with_customer'
         ORDER BY cy.serial_number
       `).all(customerId, row.size_id) as { serial_number: string }[]
-      const haystack = `${row.customer_name} ${row.mobile} ${row.size_name} ${serials.map((item) => item.serial_number).join(' ')}`.toLowerCase()
+      const haystack = `${row.customer_code} ${row.customer_name} ${row.mobile} ${row.city} ${row.size_name} ${row.challans} ${serials.map((item) => item.serial_number).join(' ')}`.toLowerCase()
       if (!pattern || haystack.includes(search)) holdings.push({ customerId: row.customer_id, customerName: row.customer_name, mobile: row.mobile, sizeName: row.size_name, serialNumbers: serials.map((item) => item.serial_number), quantity: row.quantity })
     }
   }
