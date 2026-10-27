@@ -82,7 +82,7 @@ export function ReturnsPage() {
     <Page title="Receive cylinders" subtitle="Partial and mixed returns are supported. A customer cannot return more than their outstanding balance unless you authorize a reconciliation.">
       <div className="grid gap-4 xl:grid-cols-[420px_1fr]">
         <Card className="p-5">
-          <div className="flex items-center justify-between"><h2 className="text-base font-semibold">{editing ? 'Edit return' : 'New return'}</h2>{editing ? <Button size="sm" variant="ghost" onClick={() => { setEditing(null); resetReturnForm(setForm, setLines, setRouteOverride) }}>Cancel</Button> : null}</div>
+          <div className="flex items-center justify-between gap-3"><h2 className="text-base font-semibold">{editing ? 'Edit return' : 'New return'}</h2><div className="flex items-center gap-2"><Button size="sm" onClick={() => setConfirm(true)} disabled={!payload.customerId || payload.lines.length === 0}>{editing ? 'Review changes' : 'Review return'}</Button>{editing ? <Button size="sm" variant="ghost" onClick={() => { setEditing(null); resetReturnForm(setForm, setLines, setRouteOverride) }}>Cancel</Button> : null}</div></div>
           <div className="mt-4 grid gap-3">
             <Field label="Date"><Input type="date" value={form.date} onChange={(event) => setForm({ ...form, date: event.target.value })} /></Field>
             <Field label="Customer">
@@ -127,7 +127,6 @@ export function ReturnsPage() {
             {form.allowReconciliation ? <Field label="Reconciliation reason"><Textarea value={form.reconciliationReason} onChange={(event) => setForm({ ...form, reconciliationReason: event.target.value })} /></Field> : null}
             <div className="flex items-center justify-between">
               <span className="text-sm text-muted">Total {formatCount(total)}</span>
-              <Button onClick={() => setConfirm(true)} disabled={!payload.customerId || payload.lines.length === 0}>{editing ? 'Review changes' : 'Review return'}</Button>
             </div>
           </div>
         </Card>

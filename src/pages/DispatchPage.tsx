@@ -119,7 +119,7 @@ export function DispatchPage() {
     <Page title="Dispatch cylinders" subtitle="Send one or more sizes in a single challan. Stock and customer balances update together.">
       <div className="grid gap-4 xl:grid-cols-[420px_1fr]">
         <Card className="p-5">
-          <div className="flex items-center justify-between"><h2 className="text-base font-semibold">{editing ? 'Edit dispatch' : 'New dispatch'}</h2>{editing ? <Button size="sm" variant="ghost" onClick={() => { setEditing(null); resetForm(setForm, setLines, setRouteSearch, setRouteOverride) }}>Cancel</Button> : null}</div>
+          <div className="flex items-center justify-between gap-3"><h2 className="text-base font-semibold">{editing ? 'Edit dispatch' : 'New dispatch'}</h2><div className="flex items-center gap-2"><Button size="sm" onClick={() => setConfirm(true)} disabled={!payload.customerId || payload.lines.length === 0}>{editing ? 'Review changes' : 'Review dispatch'}</Button>{editing ? <Button size="sm" variant="ghost" onClick={() => { setEditing(null); resetForm(setForm, setLines, setRouteSearch, setRouteOverride) }}>Cancel</Button> : null}</div></div>
           <div className="mt-4 grid gap-3">
             <Field label="Date"><Input type="date" value={form.date} onChange={(event) => setForm({ ...form, date: event.target.value })} /></Field>
             <Field label="Customer">
@@ -175,7 +175,6 @@ export function DispatchPage() {
             <Field label="Remarks"><Textarea value={form.remarks} onChange={(event) => setForm({ ...form, remarks: event.target.value })} /></Field>
             <div className="flex items-center justify-between">
               <span className="text-sm text-muted">Total {formatCount(total)}</span>
-              <Button onClick={() => setConfirm(true)} disabled={!payload.customerId || payload.lines.length === 0}>{editing ? 'Review changes' : 'Review dispatch'}</Button>
             </div>
           </div>
         </Card>
