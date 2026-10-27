@@ -97,6 +97,57 @@ describe('customer route assignment', () => {
     expect(getCustomer(reopened, customer.id).routeId).toBe(route.id)
   })
 
+  it('backfills one route from non-reversed document snapshots without changing balances', () => {
+    const env = tempContext()
+    const customer = createCustomer(env.ctx, fields({
+      city: 'History City',
+      openingBalances: [{ sizeId: env.sizes['3L'], quantity: 2 }],
+    }))
+    const beforeBalance = env.ctx.sqlite.prepare('SELECT outstanding FROM customer_balances WHERE customer_id = ? AND size_id = ?').get(customer.id, env.sizes['3L']) as { outstanding: number }
+    const timestamp = new Date().toISOString()
+    const routeId = Number(env.ctx.sqlite.prepare('INSERT INTO routes (name, is_active, created_at, updated_at) VALUES (?, 1, ?, ?)').run('Historical route', timestamp, timestamp).lastInsertRowid)
+    env.ctx.sqlite.prepare(`
+      INSERT INTO dispatches (number, dispatch_date, customer_id, route_id, route_name, created_by, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run('LEGACY-DSP-1', '2026-10-26', customer.id, routeId, 'Historical route', 'Legacy migration', timestamp)
+    env.ctx.sqlite.prepare(`
+      INSERT INTO returns (number, return_date, customer_id, route_id, route_name, created_by, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run('LEGACY-RTN-1', '2026-10-27', customer.id, routeId, 'Historical route', 'Legacy migration', timestamp)
+    const path = env.ctx.path
+    env.close()
+    const reopened = openDatabase(path)
+    open.push({ close: () => closeDatabase(reopened) })
+
+    expect(getCustomer(reopened, customer.id).routeId).toBe(routeId)
+    const afterBalance = reopened.sqlite.prepare('SELECT outstanding FROM customer_balances WHERE customer_id = ? AND size_id = ?').get(customer.id, env.sizes['3L']) as { outstanding: number }
+    expect(afterBalance.outstanding).toBe(beforeBalance.outstanding)
+  })
+
+  it('leaves a customer unassigned when non-reversed snapshots conflict across routes', () => {
+    const env = tempContext()
+    // The city intentionally matches one route name; the historical conflict
+    // must still win over the city fallback and remain manual.
+    const customer = createCustomer(env.ctx, fields({ city: 'Historical A' }))
+    const timestamp = new Date().toISOString()
+    const routeA = Number(env.ctx.sqlite.prepare('INSERT INTO routes (name, is_active, created_at, updated_at) VALUES (?, 1, ?, ?)').run('Historical A', timestamp, timestamp).lastInsertRowid)
+    const routeB = Number(env.ctx.sqlite.prepare('INSERT INTO routes (name, is_active, created_at, updated_at) VALUES (?, 1, ?, ?)').run('Historical B', timestamp, timestamp).lastInsertRowid)
+    env.ctx.sqlite.prepare(`
+      INSERT INTO dispatches (number, dispatch_date, customer_id, route_id, route_name, created_by, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run('CONFLICT-DSP-1', '2026-10-26', customer.id, routeA, 'Historical A', 'Legacy migration', timestamp)
+    env.ctx.sqlite.prepare(`
+      INSERT INTO returns (number, return_date, customer_id, route_id, route_name, created_by, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run('CONFLICT-RTN-1', '2026-10-27', customer.id, routeB, 'Historical B', 'Legacy migration', timestamp)
+    const path = env.ctx.path
+    env.close()
+    const reopened = openDatabase(path)
+    open.push({ close: () => closeDatabase(reopened) })
+
+    expect(getCustomer(reopened, customer.id).routeId).toBeNull()
+  })
+
   it('adds route columns and indexes to an existing current database', () => {
     const env = tempContext()
     setOpeningBalances(env.ctx, { rows: [{ sizeId: env.sizes['3L'], filled: 2, empty: 0, damaged: 0, maintenance: 0, notes: '' }] })
