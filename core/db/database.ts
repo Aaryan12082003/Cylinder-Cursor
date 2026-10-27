@@ -237,6 +237,17 @@ function ensureIncrementalSchema(sqlite: Database.Database) {
   const returnColumns = columnNames(sqlite, 'returns')
   if (!returnColumns.has('route_id')) sqlite.exec('ALTER TABLE returns ADD COLUMN route_id INTEGER REFERENCES routes(id)')
   if (!returnColumns.has('route_name')) sqlite.exec('ALTER TABLE returns ADD COLUMN route_name TEXT')
+  // Older route-aware databases stored only route_id on documents. Capture
+  // the current name before a user can rename the route so historical rows
+  // retain the name that was recorded at migration time.
+  sqlite.exec(`
+    UPDATE dispatches
+    SET route_name = (SELECT name FROM routes WHERE routes.id = dispatches.route_id)
+    WHERE route_name IS NULL AND route_id IS NOT NULL;
+    UPDATE returns
+    SET route_name = (SELECT name FROM routes WHERE routes.id = returns.route_id)
+    WHERE route_name IS NULL AND route_id IS NOT NULL;
+  `)
   sqlite.exec('CREATE INDEX IF NOT EXISTS idx_dispatches_route ON dispatches(route_id); CREATE INDEX IF NOT EXISTS idx_returns_route ON returns(route_id)')
 }
 

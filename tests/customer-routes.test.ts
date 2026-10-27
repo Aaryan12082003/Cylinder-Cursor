@@ -35,6 +35,20 @@ function fields(extra: Record<string, unknown> = {}) {
 describe('customer route assignment', () => {
   it('adds route columns and indexes to an existing current database', () => {
     const env = tempContext()
+    setOpeningBalances(env.ctx, { rows: [{ sizeId: env.sizes['3L'], filled: 2, empty: 0, damaged: 0, maintenance: 0, notes: '' }] })
+    const route = createRoute(env.ctx, { name: 'Migrated route' })
+    const customer = createCustomer(env.ctx, fields({ routeId: route.id }))
+    const dispatch = createDispatch(env.ctx, {
+      date: '2026-10-27',
+      customerId: customer.id,
+      routeId: route.id,
+      vehicleNumber: '',
+      challanNumber: '',
+      driverName: '',
+      remarks: '',
+      lines: [{ sizeId: env.sizes['3L'], quantity: 1, condition: 'filled' }],
+    })
+    env.ctx.sqlite.prepare('UPDATE dispatches SET route_name = NULL WHERE id = ?').run(dispatch.id)
     const path = env.ctx.path
     env.close()
     const sqlite = new Database(path)
@@ -47,6 +61,9 @@ describe('customer route assignment', () => {
     expect(reopened.sqlite.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_customers_route'").get()).toBeTruthy()
     expect((reopened.sqlite.prepare('PRAGMA table_info(dispatches)').all() as { name: string }[]).some((column) => column.name === 'route_name')).toBe(true)
     expect((reopened.sqlite.prepare('PRAGMA table_info(returns)').all() as { name: string }[]).some((column) => column.name === 'route_name')).toBe(true)
+    expect(getDispatch(reopened, dispatch.id).routeName).toBe('Migrated route')
+    updateRoute(reopened, { id: route.id, name: 'Renamed after migration', isActive: true })
+    expect(getDispatch(reopened, dispatch.id).routeName).toBe('Migrated route')
   })
 
   it('assigns, changes, clears, and exposes route details on customer rows', () => {
@@ -109,6 +126,7 @@ describe('route detail and document route snapshots', () => {
 
     const detail = routeDetail(env.ctx, { routeId: route.id, search: customer.code })
     expect(detail.customers).toEqual([{ customerId: customer.id, customerCode: customer.code, customerName: customer.partyName, mobile: customer.mobile, city: customer.city, status: customer.status }])
+    expect(routeDetail(env.ctx, { routeId: route.id, search: customer.city }).customers).toHaveLength(1)
     expect(routeDetail(env.ctx, { routeId: route.id }).history).toHaveLength(1)
   })
 })
