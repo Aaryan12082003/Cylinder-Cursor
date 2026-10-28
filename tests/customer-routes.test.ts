@@ -36,23 +36,69 @@ function fields(extra: Record<string, unknown> = {}) {
 }
 
 describe('customer route assignment', () => {
-  it('matches a new customer city to one active route and preserves the assignment on ordinary edits', () => {
+  it('creates or reuses a city route and preserves explicit assignments on edits', () => {
     const env = tempContext()
     open.push(env)
     const cityRoute = createRoute(env.ctx, { name: 'Mumbai' })
     const legacyRoute = createRoute(env.ctx, { name: 'Legacy route' })
     const customer = createCustomer(env.ctx, fields({ city: '  mUMbai  ', routeId: legacyRoute.id }))
 
-    // A city match is authoritative for new records, even when an older
-    // caller still sends an unrelated routeId.
-    expect(customer.routeId).toBe(cityRoute.id)
-    expect(customer.routeName).toBe(cityRoute.name)
+    // Explicit route selection takes precedence over city matching.
+    expect(customer.routeId).toBe(legacyRoute.id)
+    expect(customer.routeName).toBe(legacyRoute.name)
 
     const edited = updateCustomer(env.ctx, { id: customer.id, ...fields({ city: 'Pune' }) })
-    expect(edited.routeId).toBe(cityRoute.id)
+    expect(edited.routeId).toBe(legacyRoute.id)
 
     const explicitlyChanged = updateCustomer(env.ctx, { id: customer.id, ...fields({ city: 'Pune', routeId: legacyRoute.id }) })
     expect(explicitlyChanged.routeId).toBe(legacyRoute.id)
+  })
+
+  it('creates one normalized active route for a new city and reuses it', () => {
+    const env = tempContext()
+    open.push(env)
+    const first = createCustomer(env.ctx, fields({ city: '  New   Delhi  ' }))
+    const route = env.ctx.sqlite.prepare('SELECT id, name, is_active FROM routes WHERE lower(name) = lower(?)').get('New Delhi') as { id: number; name: string; is_active: number }
+    expect(route).toMatchObject({ name: 'New Delhi', is_active: 1 })
+    expect(first.routeId).toBe(route.id)
+    expect(first.routeName).toBe('New Delhi')
+
+    const second = createCustomer(env.ctx, fields({ city: 'new delhi', mobile: '9845011123' }))
+    expect(second.routeId).toBe(route.id)
+    expect(env.ctx.sqlite.prepare('SELECT count(*) AS count FROM routes WHERE lower(name) = lower(?)').get('New Delhi')).toEqual({ count: 1 })
+  })
+
+  it('does not city-backfill legacy customers whose history conflicts across routes', () => {
+    const env = tempContext()
+    open.push(env)
+    const customer = createCustomer(env.ctx, fields({ city: 'Conflict City' }))
+    const autoRoute = env.ctx.sqlite.prepare('SELECT id FROM routes WHERE lower(name) = lower(?)').get('Conflict City') as { id: number }
+    env.ctx.sqlite.prepare('UPDATE customers SET route_id = NULL WHERE id = ?').run(customer.id)
+    env.ctx.sqlite.prepare('DELETE FROM routes WHERE id = ?').run(autoRoute.id)
+    const routeA = createRoute(env.ctx, { name: 'History A' })
+    const routeB = createRoute(env.ctx, { name: 'History B' })
+    const timestamp = new Date().toISOString()
+    env.ctx.sqlite.prepare(`INSERT INTO dispatches (number, dispatch_date, customer_id, route_id, route_name, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`).run('CONFLICT-DSP', '2026-10-27', customer.id, routeA.id, routeA.name, 'test', timestamp)
+    env.ctx.sqlite.prepare(`INSERT INTO returns (number, return_date, customer_id, route_id, route_name, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`).run('CONFLICT-RTN', '2026-10-27', customer.id, routeB.id, routeB.name, 'test', timestamp)
+
+    const replacement = createCustomer(env.ctx, fields({ city: 'conflict city', mobile: '9845011123' }))
+    expect(replacement.routeName).toBe('conflict city')
+    expect(getCustomer(env.ctx, customer.id).routeId).toBeNull()
+  })
+
+  it('preserves a single historical route instead of assigning the new city route', () => {
+    const env = tempContext()
+    open.push(env)
+    const customer = createCustomer(env.ctx, fields({ city: 'Historical City' }))
+    const autoRoute = env.ctx.sqlite.prepare('SELECT id FROM routes WHERE lower(name) = lower(?)').get('Historical City') as { id: number }
+    env.ctx.sqlite.prepare('UPDATE customers SET route_id = NULL WHERE id = ?').run(customer.id)
+    env.ctx.sqlite.prepare('DELETE FROM routes WHERE id = ?').run(autoRoute.id)
+    const historical = createRoute(env.ctx, { name: 'Historical Route' })
+    const timestamp = new Date().toISOString()
+    env.ctx.sqlite.prepare(`INSERT INTO dispatches (number, dispatch_date, customer_id, route_id, route_name, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`).run('HIST-DSP', '2026-10-27', customer.id, historical.id, historical.name, 'test', timestamp)
+
+    createCustomer(env.ctx, fields({ city: 'historical city', mobile: '9845011123' }))
+    expect(getCustomer(env.ctx, customer.id).routeId).toBe(historical.id)
   })
 
   it('backfills unassigned customers when a route is created, renamed, or activated', () => {
@@ -60,6 +106,9 @@ describe('customer route assignment', () => {
     const env = tempContext(() => now)
     open.push(env)
     const unassigned = createCustomer(env.ctx, fields({ city: 'Jaipur' }))
+    const autoRoute = env.ctx.sqlite.prepare('SELECT id FROM routes WHERE lower(name) = lower(?)').get('Jaipur') as { id: number }
+    env.ctx.sqlite.prepare('UPDATE customers SET route_id = NULL WHERE id = ?').run(unassigned.id)
+    env.ctx.sqlite.prepare('DELETE FROM routes WHERE id = ?').run(autoRoute.id)
     const explicitRoute = createRoute(env.ctx, { name: 'Explicit route' })
     const explicitlyAssigned = createCustomer(env.ctx, fields({ city: 'Jaipur', routeId: explicitRoute.id, mobile: '9845011123' }))
 
@@ -78,6 +127,9 @@ describe('customer route assignment', () => {
     expect(getCustomer(env.ctx, waiting.id).routeId).toBe(dormant.id)
 
     const renameTarget = createCustomer(env.ctx, fields({ city: 'Udaipur', mobile: '9845011125' }))
+    const autoUdaipur = env.ctx.sqlite.prepare('SELECT id FROM routes WHERE lower(name) = lower(?)').get('Udaipur') as { id: number }
+    env.ctx.sqlite.prepare('UPDATE customers SET route_id = NULL WHERE id = ?').run(renameTarget.id)
+    env.ctx.sqlite.prepare('DELETE FROM routes WHERE id = ?').run(autoUdaipur.id)
     const renamed = createRoute(env.ctx, { name: 'Old Udaipur route' })
     updateRoute(env.ctx, { id: renamed.id, name: ' udaipur ', isActive: true })
     expect(getCustomer(env.ctx, renameTarget.id).routeId).toBe(renamed.id)
@@ -87,6 +139,9 @@ describe('customer route assignment', () => {
     const env = tempContext()
     const customer = createCustomer(env.ctx, fields({ city: 'Rajkot' }))
     const timestamp = new Date().toISOString()
+    const autoRoute = env.ctx.sqlite.prepare('SELECT id FROM routes WHERE lower(name) = lower(?)').get('Rajkot') as { id: number }
+    env.ctx.sqlite.prepare('UPDATE customers SET route_id = NULL WHERE id = ?').run(customer.id)
+    env.ctx.sqlite.prepare('DELETE FROM routes WHERE id = ?').run(autoRoute.id)
     env.ctx.sqlite.prepare('INSERT INTO routes (name, is_active, created_at, updated_at) VALUES (?, 1, ?, ?)').run('rajkot', timestamp, timestamp)
     const route = env.ctx.sqlite.prepare('SELECT id FROM routes WHERE name = ?').get('rajkot') as { id: number }
     // Simulate a database created before the one-time route-history migration.
@@ -107,6 +162,7 @@ describe('customer route assignment', () => {
     }))
     const beforeBalance = env.ctx.sqlite.prepare('SELECT outstanding FROM customer_balances WHERE customer_id = ? AND size_id = ?').get(customer.id, env.sizes['3L']) as { outstanding: number }
     const timestamp = new Date().toISOString()
+    env.ctx.sqlite.prepare('UPDATE customers SET route_id = NULL WHERE id = ?').run(customer.id)
     const routeId = Number(env.ctx.sqlite.prepare('INSERT INTO routes (name, is_active, created_at, updated_at) VALUES (?, 1, ?, ?)').run('Historical route', timestamp, timestamp).lastInsertRowid)
     env.ctx.sqlite.prepare(`
       INSERT INTO dispatches (number, dispatch_date, customer_id, route_id, route_name, created_by, created_at)
@@ -142,6 +198,9 @@ describe('customer route assignment', () => {
     const env = tempContext()
     const customer = createCustomer(env.ctx, fields({ city: 'Route-less City' }))
     const timestamp = new Date().toISOString()
+    const autoRoute = env.ctx.sqlite.prepare('SELECT id FROM routes WHERE lower(name) = lower(?)').get('Route-less City') as { id: number }
+    env.ctx.sqlite.prepare('UPDATE customers SET route_id = NULL WHERE id = ?').run(customer.id)
+    env.ctx.sqlite.prepare('DELETE FROM routes WHERE id = ?').run(autoRoute.id)
     env.ctx.sqlite.prepare('INSERT INTO routes (name, is_active, created_at, updated_at) VALUES (?, 1, ?, ?)').run('Route-less City', timestamp, timestamp)
     env.ctx.sqlite.prepare(`
       INSERT INTO dispatches (number, dispatch_date, customer_id, route_id, route_name, created_by, created_at)
@@ -162,6 +221,9 @@ describe('customer route assignment', () => {
     // must still win over the city fallback and remain manual.
     const customer = createCustomer(env.ctx, fields({ city: 'Historical A' }))
     const timestamp = new Date().toISOString()
+    const autoRoute = env.ctx.sqlite.prepare('SELECT id FROM routes WHERE lower(name) = lower(?)').get('Historical A') as { id: number }
+    env.ctx.sqlite.prepare('UPDATE customers SET route_id = NULL WHERE id = ?').run(customer.id)
+    env.ctx.sqlite.prepare('DELETE FROM routes WHERE id = ?').run(autoRoute.id)
     const routeA = Number(env.ctx.sqlite.prepare('INSERT INTO routes (name, is_active, created_at, updated_at) VALUES (?, 1, ?, ?)').run('Historical A', timestamp, timestamp).lastInsertRowid)
     const routeB = Number(env.ctx.sqlite.prepare('INSERT INTO routes (name, is_active, created_at, updated_at) VALUES (?, 1, ?, ?)').run('Historical B', timestamp, timestamp).lastInsertRowid)
     env.ctx.sqlite.prepare(`

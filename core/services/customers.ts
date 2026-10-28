@@ -54,22 +54,72 @@ function text(value: string | null | undefined): string {
  * compare case-insensitively, while retaining the route's original casing in
  * the stored relation and display value.
  */
+function routeName(value: string | null | undefined) {
+  return clean(value, 80).replace(/\s+/g, ' ')
+}
+
 function routeKey(value: string | null | undefined) {
-  return (value ?? '').trim().toLowerCase()
+  return routeName(value).toLowerCase()
 }
 
 function routeForCity(db: Db, city: string | null | undefined) {
   const key = routeKey(city)
   if (!key) return null
-  const matches = db
-    .select()
-    .from(routes)
-    .where(sql`${routes.isActive} = 1 AND lower(trim(${routes.name})) = ${key}`)
-    .all()
+  const matches = db.select().from(routes).where(sql`${routes.isActive} = 1`).all().filter((route) => routeKey(route.name) === key)
   // A legacy database can contain case-variant route names even though the
   // service now prevents them. Do not guess when more than one active route
   // matches the city.
   return matches.length === 1 ? matches[0] : null
+}
+
+function ensureRouteForCity(db: Db, city: string | null | undefined, createdAt: string) {
+  const name = routeName(city)
+  if (!name) return null
+  const active = routeForCity(db, name)
+  if (active) return active
+  const anyMatch = db.select().from(routes).all().some((route) => routeKey(route.name) === routeKey(name))
+  // An inactive route is an intentional user choice; do not reactivate or
+  // create a duplicate route behind the user's back.
+  if (anyMatch) return null
+  let created: typeof routes.$inferSelect | undefined
+  try {
+    created = db.insert(routes).values({ name, isActive: 1, createdAt, updatedAt: createdAt }).returning().all()[0]
+  } catch (error) {
+    // Another process may have committed the same city route between the
+    // lookup and insert. Re-read the active route instead of surfacing a
+    // duplicate-name error to the customer.
+    if (!String(error).toLowerCase().includes('unique')) throw error
+    const concurrent = routeForCity(db, name)
+    if (concurrent) return concurrent
+    throw error
+  }
+  if (!created) throw new BusinessError('Route could not be created.')
+  // Existing unassigned customers from this city should become visible in
+  // the new route immediately, not only the customer being created now.
+  const unassigned = db.select({ id: customers.id, city: customers.city }).from(customers)
+    .where(sql`${customers.routeId} IS NULL AND ${customers.city} IS NOT NULL`).all()
+  for (const customer of unassigned) {
+    const snapshots = db.all(sql`
+      SELECT DISTINCT route_id
+      FROM (
+        SELECT d.route_id FROM dispatches d
+        INNER JOIN routes historical_route ON historical_route.id = d.route_id
+        WHERE d.customer_id = ${customer.id} AND d.route_id IS NOT NULL AND d.reversed_at IS NULL
+        UNION ALL
+        SELECT r.route_id FROM returns r
+        INNER JOIN routes historical_route ON historical_route.id = r.route_id
+        WHERE r.customer_id = ${customer.id} AND r.route_id IS NOT NULL AND r.reversed_at IS NULL
+      )
+    `) as { route_id: number }[]
+    if (snapshots.length > 1) continue
+    if (snapshots.length === 1) {
+      db.run(sql`UPDATE customers SET route_id = ${snapshots[0].route_id}, updated_at = ${createdAt} WHERE id = ${customer.id}`)
+      continue
+    }
+    if (routeKey(customer.city) !== routeKey(name)) continue
+    db.run(sql`UPDATE customers SET route_id = ${created.id}, updated_at = ${createdAt} WHERE id = ${customer.id}`)
+  }
+  return created
 }
 
 export function balancesFor(db: Db, customerIds: number[]): Map<number, CustomerBalance[]> {
@@ -225,12 +275,8 @@ export function createCustomer(ctx: AppContext, input: CustomerCreateInput): Cus
   const id = inTx(ctx, (db) => {
     const { today, createdAt } = stamp(ctx.now())
     const actor = actorName(db)
-    // City is the source of truth for new assignments. Keep the explicit
-    // routeId fallback for older callers/backups whose city does not map to a
-    // route yet; a matching active city route always wins over that legacy
-    // selection.
-    const cityRoute = routeForCity(db, input.city)
-    const route = cityRoute ?? requireRoute(db, input.routeId)
+    const explicitRoute = 'routeId' in input && input.routeId !== undefined
+    const route = explicitRoute ? requireRoute(db, input.routeId) : ensureRouteForCity(db, input.city, createdAt)
     const code = nextNumber(db, 'customer', today, 'CUST')
     const created = db
       .insert(customers)
@@ -283,6 +329,16 @@ export function createCustomer(ctx: AppContext, input: CustomerCreateInput): Cus
       entityId: String(created.id),
       summary: `Customer ${code} ${created.partyName} added.`,
     })
+    if (!explicitRoute && route) {
+      writeAudit(db, {
+        occurredAt: createdAt,
+        actor,
+        action: 'create',
+        entityType: 'route',
+        entityId: String(route.id),
+        summary: `Automatically assigned ${created.partyName} to route ${route.name} from city ${created.city ?? route.name}.`,
+      })
+    }
     assertConsistent(db)
     return created.id
   })
