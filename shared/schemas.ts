@@ -221,6 +221,7 @@ export const reportFilterSchema = z.object({
   to: z.string().optional().default(''),
   customerId: z.number().int().positive().optional(),
   sizeId: z.number().int().positive().optional(),
+  routeId: z.number().int().positive().optional(),
   periodKey: z.string().optional().default(''),
 })
 

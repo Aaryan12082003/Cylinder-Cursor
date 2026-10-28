@@ -20,6 +20,7 @@ export const REPORT_CATALOG = [
   { id: 'month-end', title: 'Month-end closing', description: 'The stored month-end holding snapshot.' },
   { id: 'damaged-lost', title: 'Damaged and lost', description: 'Cylinders recorded as damaged, lost, or under maintenance.' },
   { id: 'customers', title: 'Customer register', description: 'Customer master records and current outstanding balances.' },
+  { id: 'route-register', title: 'Route register', description: 'Route status, assigned parties, current cylinders, and movement counts.' },
 ] as const
 
 export type ReportFilters = {
@@ -28,6 +29,7 @@ export type ReportFilters = {
   to?: string
   customerId?: number
   sizeId?: number
+  routeId?: number
   periodKey?: string
 }
 
@@ -66,8 +68,119 @@ export function runReport(ctx: AppContext, filters: ReportFilters): ReportModel 
       return damagedReport(ctx, subtitle)
     case 'customers':
       return customerReport(ctx, subtitle, dateFormat)
+    case 'route-register':
+      return routeRegisterReport(ctx, subtitle, filters)
     default:
       throw new BusinessError('Unknown report.')
+  }
+}
+
+function routeRegisterReport(ctx: AppContext, subtitle: string, filters: ReportFilters): ReportModel {
+  const sizes = listSizeBalances(ctx.db)
+  const reportSizes = filters.sizeId
+    ? sizes.filter((size) => size.id === filters.sizeId)
+    : sizes.filter((size) => size.isActive || size.owned || size.withCustomers)
+  const balanceColumns = reportSizes.map((size, index) => `COALESCE(bb.size_${index}, 0) AS size_${index}`).join(',\n           ')
+  const balanceCases = reportSizes.map((size, index) => `SUM(CASE WHEN b.size_id = ${size.id} THEN b.outstanding ELSE 0 END) AS size_${index}`).join(',\n              ')
+  const params: unknown[] = []
+  const dispatchWhere: string[] = []
+  const returnWhere: string[] = []
+  if (filters.from) {
+    dispatchWhere.push('d.dispatch_date >= ?')
+    returnWhere.push('r.return_date >= ?')
+  }
+  if (filters.to) {
+    dispatchWhere.push('d.dispatch_date <= ?')
+    returnWhere.push('r.return_date <= ?')
+  }
+  params.push(...[filters.from, filters.to].filter((value): value is string => Boolean(value)))
+  params.push(...[filters.from, filters.to].filter((value): value is string => Boolean(value)))
+  const customerWhere: string[] = []
+  if (filters.customerId) {
+    customerWhere.push('c.id = ?')
+    params.push(filters.customerId)
+  }
+  if (filters.routeId) {
+    customerWhere.push('r.id = ?')
+    params.push(filters.routeId)
+  }
+  const balanceSizeWhere = filters.sizeId ? ` AND b.size_id = ${filters.sizeId}` : ''
+  const customerWhereSql = customerWhere.length ? `WHERE ${customerWhere.join(' AND ')}` : ''
+  const balanceSelect = balanceColumns ? `${balanceColumns},` : ''
+  const sqlText = `
+    WITH balance_by_customer AS (
+      SELECT c.id AS customer_id,
+             ${balanceCases ? `${balanceCases},` : ''}
+             SUM(b.outstanding) AS total
+      FROM customers c
+      LEFT JOIN customer_balances b ON b.customer_id = c.id${balanceSizeWhere}
+      GROUP BY c.id
+    ), dispatch_by_customer AS (
+      SELECT d.customer_id, d.route_id, COUNT(DISTINCT d.id) AS dispatches
+      FROM dispatches d
+      WHERE d.route_id IS NOT NULL${dispatchWhere.length ? ` AND ${dispatchWhere.join(' AND ')}` : ''}
+      GROUP BY d.customer_id, d.route_id
+    ), return_by_customer AS (
+      SELECT r.customer_id, r.route_id, COUNT(DISTINCT r.id) AS returns
+      FROM returns r
+      WHERE r.route_id IS NOT NULL${returnWhere.length ? ` AND ${returnWhere.join(' AND ')}` : ''}
+      GROUP BY r.customer_id, r.route_id
+    )
+    SELECT r.name AS route,
+           CASE WHEN r.is_active = 1 THEN 'Active' ELSE 'Inactive' END AS status,
+           c.code AS customer_id,
+           c.party_name AS customer,
+           COALESCE(c.mobile, '') AS mobile,
+           ${balanceSelect}
+           COALESCE(bb.total, 0) AS total,
+           COALESCE(dc.dispatches, 0) AS dispatches,
+           COALESCE(rc.returns, 0) AS returns
+    FROM routes r
+    LEFT JOIN customers c ON c.route_id = r.id
+    LEFT JOIN balance_by_customer bb ON bb.customer_id = c.id
+    LEFT JOIN dispatch_by_customer dc ON dc.customer_id = c.id AND dc.route_id = c.route_id
+    LEFT JOIN return_by_customer rc ON rc.customer_id = c.id AND rc.route_id = c.route_id
+    ${customerWhereSql}
+    ORDER BY lower(r.name), lower(c.party_name), c.id
+  `
+  const found = rows<Record<string, string | number | null>>(ctx, sqlText, params)
+  const output = found.map((row) => {
+    const record: Record<string, string | number | null> = {
+      route: row.route,
+      status: row.status,
+      customerId: row.customer_id,
+      customer: row.customer,
+      mobile: row.mobile,
+      total: Number(row.total ?? 0),
+      dispatches: Number(row.dispatches ?? 0),
+      returns: Number(row.returns ?? 0),
+    }
+    reportSizes.forEach((size, index) => { record[size.code] = Number(row[`size_${index}`] ?? 0) })
+    return record
+  })
+  return {
+    id: 'route-register',
+    title: 'Route register',
+    subtitle,
+    columns: [
+      { key: 'route', label: 'Route' },
+      { key: 'status', label: 'Status' },
+      { key: 'customerId', label: 'Customer ID' },
+      { key: 'customer', label: 'Customer' },
+      { key: 'mobile', label: 'Mobile' },
+      ...reportSizes.map((size) => ({ key: size.code, label: size.name, align: 'right' as const })),
+      { key: 'total', label: 'Cylinders held', align: 'right' },
+      { key: 'dispatches', label: 'Dispatches', align: 'right' },
+      { key: 'returns', label: 'Returns', align: 'right' },
+    ],
+    rows: output,
+    summary: [
+      { label: 'Routes', value: String(new Set(output.map((row) => String(row.route ?? ''))).size) },
+      { label: 'Customers', value: formatCount(output.filter((row) => row.customerId !== null && row.customerId !== undefined && row.customerId !== '').length) },
+      { label: 'Cylinders held', value: formatCount(output.reduce((sum, row) => sum + Number(row.total ?? 0), 0)) },
+      { label: 'Dispatches', value: formatCount(output.reduce((sum, row) => sum + Number(row.dispatches ?? 0), 0)) },
+      { label: 'Returns', value: formatCount(output.reduce((sum, row) => sum + Number(row.returns ?? 0), 0)) },
+    ],
   }
 }
 

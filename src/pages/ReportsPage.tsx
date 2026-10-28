@@ -11,7 +11,7 @@ export function ReportsPage() {
   const customers = useQuery({ queryKey: ['customers', 'reports'], queryFn: () => api.customers({ page: 1, pageSize: 100, status: 'all', sortBy: 'partyName', sortDir: 'asc' }) })
   const periods = useQuery({ queryKey: ['month-ends'], queryFn: api.monthEnds })
   const [selected, setSelected] = useState('inventory')
-  const [filters, setFilters] = useState({ from: '', to: '', customerId: '', sizeId: '', periodKey: '' })
+  const [filters, setFilters] = useState({ from: '', to: '', customerId: '', sizeId: '', periodKey: '', routeId: '' })
   const payload = {
     id: selected,
     from: filters.from,
@@ -19,6 +19,7 @@ export function ReportsPage() {
     customerId: filters.customerId ? Number(filters.customerId) : undefined,
     sizeId: filters.sizeId ? Number(filters.sizeId) : undefined,
     periodKey: filters.periodKey,
+    routeId: filters.routeId ? Number(filters.routeId) : undefined,
   }
   const report = useQuery({ queryKey: ['report', payload], queryFn: () => api.runReport(payload), retry: false })
   return (
@@ -32,11 +33,12 @@ export function ReportsPage() {
         ))}
       </div>
       <Card className="mt-4 p-4">
-        <div className="grid gap-3 md:grid-cols-5">
+        <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
           <Field label="From"><Input type="date" value={filters.from} onChange={(event) => setFilters({ ...filters, from: event.target.value })} /></Field>
           <Field label="To"><Input type="date" value={filters.to} onChange={(event) => setFilters({ ...filters, to: event.target.value })} /></Field>
           <Field label="Customer"><Select value={filters.customerId} onChange={(event) => setFilters({ ...filters, customerId: event.target.value })}><option value="">All</option>{customers.data?.rows.map((row) => <option key={row.id} value={row.id}>{row.partyName}</option>)}</Select></Field>
           <Field label="Size"><Select value={filters.sizeId} onChange={(event) => setFilters({ ...filters, sizeId: event.target.value })}><option value="">All</option>{settings.data?.sizes.map((size) => <option key={size.id} value={size.id}>{size.name}</option>)}</Select></Field>
+          <Field label="Route"><Select value={filters.routeId} onChange={(event) => setFilters({ ...filters, routeId: event.target.value })}><option value="">All routes</option>{settings.data?.routes.map((route) => <option key={route.id} value={route.id}>{route.name}{route.isActive ? '' : ' (inactive)'}</option>)}</Select></Field>
           <Field label="Month-end"><Select value={filters.periodKey} onChange={(event) => setFilters({ ...filters, periodKey: event.target.value })}><option value="">Latest</option>{periods.data?.map((period) => <option key={period.periodKey} value={period.periodKey}>{period.periodLabel}</option>)}</Select></Field>
         </div>
         <div className="mt-3 flex gap-2">
