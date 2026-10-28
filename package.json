@@ -1,7 +1,7 @@
 {
   "name": "cylinderflow",
   "productName": "CylinderFlow",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "description": "Offline Windows desktop software for industrial gas cylinder inventory, dispatch, returns, and customer balances.",
   "author": "CylinderFlow",
   "license": "UNLICENSED",
